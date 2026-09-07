@@ -1,1 +1,1 @@
-web: npx serve . -l $PORT -s
+web: npm start
