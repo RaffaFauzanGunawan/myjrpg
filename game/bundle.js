@@ -2,6 +2,73 @@
 (function() {
 "use strict";
 
+// ==========================================
+// ERROR BOUNDARY & LOGGING
+// ==========================================
+const _errorLog = [];
+const _maxLogEntries = 50;
+
+function _logError(source, msg, err) {
+  const entry = {
+    time: new Date().toISOString().slice(11, 19),
+    source: source,
+    message: msg,
+    stack: err ? err.stack || '' : '',
+    id: _errorLog.length
+  };
+  _errorLog.push(entry);
+  if (_errorLog.length > _maxLogEntries) _errorLog.shift();
+  console.error('[' + source + '] ' + msg, err || '');
+}
+
+// Global uncaught error handler
+window.addEventListener('error', function(e) {
+  _logError('UNCAUGHT', e.message, e.error);
+  _showErrorOverlay(e.message, e.filename, e.lineno);
+  return true;
+});
+
+window.addEventListener('unhandledrejection', function(e) {
+  _logError('PROMISE_REJECTION', String(e.reason), null);
+  _showErrorOverlay('Unhandled Promise: ' + String(e.reason));
+  return true;
+});
+
+function _showErrorOverlay(msg, file, line) {
+  // Don't show overlay for minor warnings
+  if (msg && msg.includes('ResizeObserver')) return;
+
+  let overlay = document.getElementById('game-error-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'game-error-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(30,0,0,0.95);color:#ff6b6b;padding:12px 20px;font-family:monospace;font-size:13px;border-bottom:2px solid #c0392b;display:flex;align-items:center;gap:12px;cursor:pointer;max-height:120px;overflow:auto;';
+    overlay.innerHTML = '<span style="font-size:18px">⚠️</span><div style="flex:1"><b>Runtime Error</b><div id="game-error-msg" style="color:#ddd;margin-top:4px;word-break:break-all"></div><div id="game-error-loc" style="color:#888;font-size:11px;margin-top:2px"></div></div><span style="color:#888;font-size:11px">Click to dismiss</span>';
+    overlay.addEventListener('click', function() { overlay.style.display = 'none'; });
+    document.body.appendChild(overlay);
+  }
+
+  document.getElementById('game-error-msg').textContent = msg || 'Unknown error';
+  document.getElementById('game-error-loc').textContent = file ? (file.split('/').pop() + (line ? ':' + line : '')) : '';
+  overlay.style.display = 'flex';
+  // Auto-hide after 8 seconds
+  clearTimeout(overlay._hideTimer);
+  overlay._hideTimer = setTimeout(function() { overlay.style.display = 'none'; }, 8000);
+}
+
+// Utility: safe wrapper for game functions
+function _safe(fn, fallback) {
+  return function() {
+    try {
+      return fn.apply(this, arguments);
+    } catch(e) {
+      _logError('GAME', e.message, e);
+      _showErrorOverlay(e.message);
+      return fallback !== undefined ? fallback : null;
+    }
+  };
+}
+
 // === characters.js ===
 // ==========================================
 // Chronicles of the Fallen Crown - Character Data
@@ -3253,6 +3320,7 @@ class Game {
     this.menuOpen = false;
     this.craftingOpen = false;
     this.shopOpen = false;
+    this.showErrorLog = false;
 
     this.lastTime = 0;
     this.running = false;
@@ -3263,7 +3331,7 @@ class Game {
   setupInput() {
     window.addEventListener('keydown', (e) => {
       this.keys[e.key] = true;
-      this.handleKeyPress(e.key);
+      try { this.handleKeyPress(e.key); } catch(err) { _logError('KEY_INPUT', err.message, err); _showErrorOverlay(err.message); }
     });
 
     window.addEventListener('keyup', (e) => {
@@ -3274,7 +3342,7 @@ class Game {
       const rect = this.canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) * (W / rect.width);
       const y = (e.clientY - rect.top) * (H / rect.height);
-      this.handleClick(x, y);
+      try { this.handleClick(x, y); } catch(err) { _logError('CLICK_INPUT', err.message, err); _showErrorOverlay(err.message); }
     });
   }
 
@@ -3291,8 +3359,16 @@ class Game {
     const dt = (now - this.lastTime) / 1000;
     this.lastTime = now;
 
-    this.update(dt);
-    this.render();
+    try {
+      this.update(dt);
+    } catch(e) {
+      _logError('UPDATE', e.message, e);
+    }
+    try {
+      this.render();
+    } catch(e) {
+      _logError('RENDER', e.message, e);
+    }
 
     requestAnimationFrame(() => this.gameLoop());
   }
@@ -3735,6 +3811,15 @@ class Game {
 
   // ============ INPUT HANDLING ============
   handleKeyPress(key) {
+    // F1: Toggle error log display
+    if (key === 'F1') {
+      this.showErrorLog = !this.showErrorLog;
+      if (this.showErrorLog) {
+        console.log('[DEBUG] Error log (' + _errorLog.length + ' entries):', _errorLog);
+      }
+      return;
+    }
+
     if (this.state.screen === 'title') {
       if (key === 'Enter') {
         this.state.screen = 'prologue';
@@ -4029,6 +4114,11 @@ class Game {
 
     // Notifications (always on top)
     this.renderNotifications();
+
+    // Error log overlay (F1 toggle)
+    if (this.showErrorLog) {
+      this.renderErrorLog();
+    }
   }
 
   renderTitleScreen() {
@@ -4925,6 +5015,42 @@ class Game {
       ctx.globalAlpha = 1;
       ny += 40;
     }
+  }
+
+  // ============ ERROR LOG DISPLAY ============
+  renderErrorLog() {
+    if (_errorLog.length === 0) return;
+    const ctx = this.ctx;
+    const x = 16;
+    let y = H - 16;
+
+    // Draw from bottom up, most recent first
+    const toShow = _errorLog.slice(-8).reverse();
+    for (let i = 0; i < toShow.length; i++) {
+      const entry = toShow[i];
+      const alpha = 1 - (i * 0.1);
+      ctx.globalAlpha = alpha * 0.85;
+      ctx.fillStyle = 'rgba(40,0,0,0.9)';
+      ctx.beginPath();
+      ctx.roundRect(x, y - 24, 500, 22, 3);
+      ctx.fill();
+
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#ff6b6b';
+      ctx.fillText('[' + entry.time + '] ' + entry.source + ': ' + entry.message.slice(0, 70), x + 6, y - 8);
+      ctx.globalAlpha = 1;
+      y -= 26;
+    }
+  }
+
+  // ============ DEBUG HELPERS ============
+  getErrorLog() {
+    return _errorLog.slice();
+  }
+
+  clearErrorLog() {
+    _errorLog.length = 0;
   }
 }
 
