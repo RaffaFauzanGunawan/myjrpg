@@ -1049,6 +1049,73 @@ body {
 (function() {
 "use strict";
 
+// ==========================================
+// ERROR BOUNDARY & LOGGING
+// ==========================================
+const _errorLog = [];
+const _maxLogEntries = 50;
+
+function _logError(source, msg, err) {
+  const entry = {
+    time: new Date().toISOString().slice(11, 19),
+    source: source,
+    message: msg,
+    stack: err ? err.stack || '' : '',
+    id: _errorLog.length
+  };
+  _errorLog.push(entry);
+  if (_errorLog.length > _maxLogEntries) _errorLog.shift();
+  console.error('[' + source + '] ' + msg, err || '');
+}
+
+// Global uncaught error handler
+window.addEventListener('error', function(e) {
+  _logError('UNCAUGHT', e.message, e.error);
+  _showErrorOverlay(e.message, e.filename, e.lineno);
+  return true;
+});
+
+window.addEventListener('unhandledrejection', function(e) {
+  _logError('PROMISE_REJECTION', String(e.reason), null);
+  _showErrorOverlay('Unhandled Promise: ' + String(e.reason));
+  return true;
+});
+
+function _showErrorOverlay(msg, file, line) {
+  // Don't show overlay for minor warnings
+  if (msg && msg.includes('ResizeObserver')) return;
+
+  let overlay = document.getElementById('game-error-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'game-error-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(30,0,0,0.95);color:#ff6b6b;padding:12px 20px;font-family:monospace;font-size:13px;border-bottom:2px solid #c0392b;display:flex;align-items:center;gap:12px;cursor:pointer;max-height:120px;overflow:auto;';
+    overlay.innerHTML = '<span style="font-size:18px">⚠️</span><div style="flex:1"><b>Runtime Error</b><div id="game-error-msg" style="color:#ddd;margin-top:4px;word-break:break-all"></div><div id="game-error-loc" style="color:#888;font-size:11px;margin-top:2px"></div></div><span style="color:#888;font-size:11px">Click to dismiss</span>';
+    overlay.addEventListener('click', function() { overlay.style.display = 'none'; });
+    document.body.appendChild(overlay);
+  }
+
+  document.getElementById('game-error-msg').textContent = msg || 'Unknown error';
+  document.getElementById('game-error-loc').textContent = file ? (file.split('/').pop() + (line ? ':' + line : '')) : '';
+  overlay.style.display = 'flex';
+  // Auto-hide after 8 seconds
+  clearTimeout(overlay._hideTimer);
+  overlay._hideTimer = setTimeout(function() { overlay.style.display = 'none'; }, 8000);
+}
+
+// Utility: safe wrapper for game functions
+function _safe(fn, fallback) {
+  return function() {
+    try {
+      return fn.apply(this, arguments);
+    } catch(e) {
+      _logError('GAME', e.message, e);
+      _showErrorOverlay(e.message);
+      return fallback !== undefined ? fallback : null;
+    }
+  };
+}
+
 // === characters.js ===
 // ==========================================
 // Chronicles of the Fallen Crown - Character Data
@@ -2380,7 +2447,943 @@ class GameState {
   }
 }
 
-// === world.js ===
+// ==========================================
+// Chronicles of the Fallen Crown - Pixel Art Sprite System
+// All characters, enemies, and tiles drawn as pixel grids
+// ==========================================
+
+// ---------- PALETTE ----------
+const PALETTE = {
+  '.': null,          // transparent
+  'k': '#14141f',     // outline / near-black
+  'n': '#1b2631',     // dark navy
+  'd': '#3a3a4a',     // dark grey
+  'g': '#7f8c8d',     // grey
+  'm': '#aab2b5',     // light metal
+  'w': '#eceff1',     // white
+  's': '#f0c8a0',     // skin light
+  'S': '#c98d5f',     // skin tan
+  'h': '#5a3a22',     // brown hair
+  'H': '#2e1f14',     // dark hair
+  'r': '#c0392b',     // red
+  'R': '#e74c3c',     // bright red
+  'o': '#d35400',     // orange
+  'O': '#e67e22',     // bright orange
+  'y': '#e8c547',     // gold
+  'Y': '#f5d76e',     // light gold
+  'b': '#3d5a80',     // steel blue
+  'B': '#2a4170',     // dark blue
+  'c': '#1abc9c',     // cyan
+  'C': '#16a085',     // teal
+  'G': '#1e8a4a',     // green
+  'L': '#3fae5f',     // light green
+  'l': '#8bc34a',     // lime
+  'p': '#8e44ad',     // purple
+  'P': '#5b2c6f',     // dark purple
+  'e': '#d9822b',     // enemy carapace orange
+  'E': '#8a4a12',     // dark carapace
+  'f': '#e8d5b0',     // cream / bone
+  't': '#2c6e3f',     // tree dark green
+  'T': '#3e8e4f',     // tree green
+  'u': '#9b7653',     // wood brown
+  'U': '#6f4e2e',     // dark wood
+  'a': '#c9a86a',     // sand
+  'i': '#2980b9',     // ice blue
+  'q': '#2a4a8a',     // deep water
+  'z': '#f39c12',     // bright amber
+  'x': '#5d4037',     // brown
+};
+
+// ---------- HELPERS ----------
+const _spriteCache = {};
+
+function makeSprite(rows, scale) {
+  const h = rows.length;
+  const w = rows[0].length;
+  const c = document.createElement('canvas');
+  c.width = w * scale;
+  c.height = h * scale;
+  const ctx = c.getContext('2d');
+  for (let y = 0; y < h; y++) {
+    const row = rows[y];
+    for (let x = 0; x < w; x++) {
+      const col = PALETTE[row[x]];
+      if (!col) continue;
+      ctx.fillStyle = col;
+      ctx.fillRect(x * scale, y * scale, scale, scale);
+    }
+  }
+  return c;
+}
+
+function getSprite(key, rows, scale) {
+  if (!_spriteCache[key]) {
+    _spriteCache[key] = makeSprite(rows, scale || 3);
+  }
+  return _spriteCache[key];
+}
+
+function drawSprite(ctx, canvas, x, y, w, h) {
+  if (!canvas) return;
+  if (w === undefined) { w = canvas.width; h = canvas.height; }
+  ctx.drawImage(canvas, Math.round(x), Math.round(y), w, h);
+}
+
+// ---------- CHARACTER SPRITES (12 x 15, scale 3 = 36x45) ----------
+
+const CHARACTER_SPRITE_ROWS = {
+  cedric: [ // Blue knight with sword & shield
+    '....kkkk....',
+    '...khhhhk...',
+    '...khhhhk...',
+    '..kkkkkkkk..',
+    '..kssssssk..',
+    '..kskskssk..',
+    '..kssssssk..',
+    '...kkkkkk...',
+    '..kbbbbbbk..',
+    '.kbbbbbbbbk.',
+    '.kbbbsbbbkm.',
+    '.kbbbbbbbkm.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  lyra: [ // Purple mage with staff
+    '....pppp....',
+    '...pHHHHp...',
+    '...pHHHHp...',
+    '..pppppppp..',
+    '..pssssssp..',
+    '..pspspspp..',
+    '..pssssssp..',
+    '...pppppp...',
+    '..kppppppk..',
+    '.kppppppppk.',
+    '.kpppppppkU.',
+    '.kpppppppkU.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  aldous: [ // Cleric white/gold robes
+    '....ykyk....',
+    '...kwwwwk...',
+    '...kwwwwk...',
+    '..kywwwwyk..',
+    '..yssssssy..',
+    '..ysysysyy..',
+    '..yssssssy..',
+    '...yyyyyy...',
+    '..kwwwwwwk..',
+    '.kwwwwwwwwk.',
+    '.kwwwwwkwwk.',
+    '.kwwwwwwwww.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  rowan: [ // Green ranger with bow
+    '....llll....',
+    '...lHHHHl...',
+    '...lHHHHl...',
+    '..llllllll..',
+    '..lssssssl..',
+    '..lslslsll..',
+    '..lssssssl..',
+    '...llllll...',
+    '..kLLLLLLk..',
+    '.kLLLLLLLLk.',
+    '.kLLLLLkku..',
+    '.kLLLLLLku..',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  mira: [ // Dark assassin with twin daggers
+    '....HHHH....',
+    '...HrrrHH...',
+    '...HrrrHH...',
+    '..HHHHHHHH..',
+    '..HssssssH..',
+    '..HsrsrssH..',
+    '..HssssssH..',
+    '...HHHHHH...',
+    '..knnnnnnk..',
+    '.knnnnnnnnk.',
+    '.knnsnnnmk..',
+    '.knnnnnnmk..',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  dorin: [ // Dwarf blacksmith with hammer & beard
+    '....oooo....',
+    '...ohhhho...',
+    '..koooook...',
+    '..kSSSSSSk..',
+    '..kSSSSSSk..',
+    '..kSkSkSSk..',
+    '..kSSSSSSk..',
+    '..kkkSSkkk..',
+    '.koooooooom.',
+    '.kooooooomm.',
+    '.koosooomk..',
+    '.kooooomk...',
+    '..kkkkkk....',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  seraphina: [ // Noble spellblade cyan/silver
+    '....cccc....',
+    '...cYYYYc...',
+    '...cYYYYc...',
+    '..cccccccc..',
+    '..cssssssc..',
+    '..cskskscc..',
+    '..cssssssc..',
+    '...cccccc...',
+    '..kcccccck..',
+    '.kccccccccc.',
+    '.kcccwcccmm.',
+    '.kcccccccmm.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+};
+
+const CHARACTER_SPRITES = {};
+function getCharacterSprite(id) {
+  const rows = CHARACTER_SPRITE_ROWS[id];
+  if (!rows) return getCharacterSprite('cedric');
+  return getSprite('char_' + id, rows, 3);
+}
+
+// ---------- ENEMY SPRITES (12 x 12, scale 3 = 36x36) ----------
+
+const ENEMY_SPRITE_ROWS = {
+  slime: [ // Green blob
+    '....GGGG....',
+    '...GGGGGG...',
+    '..GGGGGGGG..',
+    '.GGGGGGGGGG.',
+    '.GGGGGGGGGG.',
+    'GGGGGGGGGGGG',
+    'GGGGGGGGGGGG',
+    'GGGkGGGGkGGG',
+    'GGGGGGGGGGGG',
+    '.GGGGGGGGGG.',
+    '..GGGGGGGG..',
+    '...GGGGGG...',
+  ],
+  goblin: [ // Small green goblin
+    '....GGGG....',
+    '...GGGGGG...',
+    '...GssssG...',
+    '..GsGsGsG...',
+    '..GssssssG..',
+    '...GGGGGG...',
+    '..GkGGGGkG..',
+    '.GGGGGGGGGG.',
+    '.GGGGGGGGGG.',
+    '..GGGGGGGG..',
+    '...GG..GG...',
+    '...GG..GG...',
+  ],
+  wolf: [ // Grey wolf
+    '.....ggg....',
+    '....ggggg...',
+    '...gggggg...',
+    '...gkgkg....',
+    '..ggggggg...',
+    '..gggggggg..',
+    '.ggggggggg..',
+    '.ggggggggg..',
+    '..ggggggg...',
+    '..gg.ggg....',
+    '.gg..ggg....',
+    'gg...gg.....',
+  ],
+  skeleton: [ // Bone warrior
+    '....ffff....',
+    '...ffffff...',
+    '...fkfkf....',
+    '..ffffffff..',
+    '..ffffffff..',
+    '...fffff....',
+    '..fffffff...',
+    '.fffffffff..',
+    '.fffffffff..',
+    '..fffffff...',
+    '...fff.fff..',
+    '...fff.fff..',
+  ],
+  fire_imp: [ // Red imp
+    '....RRRR....',
+    '...RRRRRR...',
+    '...RssssR...',
+    '..RsRsRsR...',
+    '..RssssssR..',
+    '...RRRRRR...',
+    '..RkRRRRkR..',
+    '.RRRRRRRRRR.',
+    '.RRRRRRRRRR.',
+    '..RRRRRRRR..',
+    '...RR..RR...',
+    '...RR..RR...',
+  ],
+  bandit: [ // Hooded bandit
+    '....nnnn....',
+    '...nnnnnn...',
+    '...nssssn...',
+    '..nsnsnsn...',
+    '..nssssssn..',
+    '...nnnnnn...',
+    '..kkkkkkkk..',
+    '.kxxxxxxkk..',
+    '.kxxxxxxkk..',
+    '.kxxxxxxxxk.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+  ],
+  golem: [ // Stone golem
+    '...kkkkkk...',
+    '..kggggggk..',
+    '.kgggkgkggk.',
+    '.kggggggggk.',
+    '.kgggkgkggk.',
+    '.kggggggggk.',
+    '.kgkkkkkkgg.',
+    '.kggggggggk.',
+    '.kggggggggk.',
+    '.kkkkkkkkkk.',
+    '..kk....kk..',
+    '..kk....kk..',
+  ],
+  mage_enemy: [ // Dark sorcerer
+    '....PPPP....',
+    '...PPPPPp...',
+    '...pssssp...',
+    '..pspspsp...',
+    '..pssssssp..',
+    '...PPPPPP...',
+    '..kppppppk..',
+    '.kppppppppk.',
+    '.kpppppppkU.',
+    '.kpppppppkU.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+  ],
+  wyvern: [ // Blue wyvern
+    '....iiii....',
+    '...iiiiii...',
+    '..iiiiiiii..',
+    '..ikikiii...',
+    '.iiiiiiiiii.',
+    '.iiiiiiiiii.',
+    'i.iiiiiiii..',
+    'i.iiiiiii...',
+    '.iiiiiiii...',
+    '..iiiiii....',
+    '..i..iii....',
+    'ii...ii.....',
+  ],
+  bug: [ // Insect creature (orange carapace) - like reference image
+    '....eeee....',
+    '...eeeeee...',
+    '..eeEEEEee..',
+    '.eeEEEEEEee.',
+    '.eeEkkEEee..',
+    'eeEEEEEEEEee',
+    'eeEEEEEEEEee',
+    'eeEkEEEEkEee',
+    '.eeEEEEEEee.',
+    '..eeeeeeee..',
+    '..ee..ee..ee',
+    '..ee..ee..ee',
+  ],
+  boss_shadow_knight: [ // Shadow Knight boss (bigger: 14x14)
+    '....nnnnnn....',
+    '...nnnnnnnn...',
+    '...nnnnnnnn...',
+    '..nnnnnnnnnn..',
+    '..nkksssskkn..',
+    '..nksksksksn..',
+    '..nkksssskkn..',
+    '...nnnnnnnn...',
+    '..nnnnnnnnnn..',
+    '.nnnnnnnnnnnn.',
+    '.nnkknnnnnnnn.',
+    '.nnnnnnnnnnnn.',
+    '..nnnnnnnnnn..',
+    '..nn..nn..nn..',
+    '..nn..nn..nn..',
+  ],
+  boss_dragon_lord: [ // Dragon Lord boss
+    '....tttttt....',
+    '...tttttttt...',
+    '...tYtYttt....',
+    '..tttttttttt..',
+    '.rrttttttttrr.',
+    'r.rrttttttrr..',
+    'rrrrttttttr...',
+    '.rrtttttttt...',
+    '..tttttttt....',
+    '..ttttttttt...',
+    '.ttttttttttt..',
+    '.ttt.tt.ttt...',
+    '..t..ttt..t...',
+    '..tt....tt....',
+  ],
+  boss_tyrant: [ // Tyrant with crown
+    '...yYyyYy...',
+    '..ykkkkkky..',
+    '..kxxxxxxk..',
+    '..kxxxxxxk..',
+    '..kssssssk..',
+    '..kskskssk..',
+    '..kssssssk..',
+    '...kkkkkk...',
+    '..kxxxxxxk..',
+    '.kxxxxxxxxk.',
+    '.kxxkxxkxxk.',
+    '.kxxxxxxxxk.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+};
+
+const ENEMY_SPRITES = {};
+function getEnemySprite(id) {
+  const rows = ENEMY_SPRITE_ROWS[id];
+  if (!rows) return getEnemySprite('slime');
+  const isBoss = id.indexOf('boss') === 0;
+  return getSprite('enemy_' + id, rows, isBoss ? 4 : 3);
+}
+
+// ---------- NPC SPRITES (12 x 14) ----------
+const NPC_SPRITE_ROWS = {
+  elder: [ // Elder with beard & staff
+    '....wwww....',
+    '...wwwwww...',
+    '...wssssw...',
+    '..wswswsw...',
+    '..wssssssw..',
+    '...wwwwww...',
+    '..kwwwwwwk..',
+    '..kwwwwwwk..',
+    '.kwwwwwwwwk.',
+    '.kwwwwwwwww.',
+    '.kwwwwwwwku.',
+    '.kwwwwwwwku.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  guard: [ // Guard with helmet & spear
+    '....kkkk....',
+    '...kmmmmk...',
+    '...kmmmmk...',
+    '..kmmmmmmk..',
+    '..kssssssk..',
+    '..kskskssk..',
+    '..kssssssk..',
+    '...kkkkkk...',
+    '..knnnnnnk..',
+    '.knnnnnnnnk.',
+    '.knnnnnnnnk.',
+    '.knnnnnnnku.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  merchant: [ // Merchant with hat & coat
+    '....uuuu....',
+    '...uuuuuu...',
+    '..uuuuuuuu..',
+    '..kssssssk..',
+    '..kskskssk..',
+    '..kssssssk..',
+    '...kkkkkk...',
+    '..kxxxxxxk..',
+    '.kxxxxxxxxk.',
+    '.kxxkxxkxxk.',
+    '.kxxxxxxxxk.',
+    '..kxxxxxxk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  scholar: [ // Scholar with book & glasses
+    '....HHHH....',
+    '...HHHHHH...',
+    '...kssssk...',
+    '..ksksksk...',
+    '..kssssssk..',
+    '...kkkkkk...',
+    '..kppppppk..',
+    '.kppppppppk.',
+    '.kpppppkppk.',
+    '.kppppppppk.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  child: [ // Child
+    '....HHHH....',
+    '...HHHHHH...',
+    '...ssssss...',
+    '..ssssssss..',
+    '..skskskss..',
+    '..ssssssss..',
+    '...kkkkkk...',
+    '..krrrrrrk..',
+    '.krrrrrrrrk.',
+    '..krrrrrrk..',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+  villager: [ // Generic villager
+    '....hhhh....',
+    '...hhhhhh...',
+    '...kssssk...',
+    '..ksksksk...',
+    '..kssssssk..',
+    '...kkkkkk...',
+    '..kggggggk..',
+    '.kggggggggk.',
+    '.kggkggkggk.',
+    '.kggggggggk.',
+    '..kkkkkkkk..',
+    '..kk..kk....',
+    '..kk..kk....',
+  ],
+};
+
+const NPC_SPRITES = {};
+function getNpcSprite(id) {
+  let key = 'villager';
+  if (id.indexOf('elder') === 0) key = 'elder';
+  else if (id.indexOf('guard') === 0 || id.indexOf('captain') === 0) key = 'guard';
+  else if (id.indexOf('merchant') === 0 || id.indexOf('herbalist') === 0) key = 'merchant';
+  else if (id.indexOf('scholar') === 0 || id.indexOf('bard') === 0) key = 'scholar';
+  else if (id.indexOf('orphan') === 0 || id.indexOf('refugee') === 0 || id.indexOf('miner') === 0) key = 'child';
+  return getSprite('npc_' + key, NPC_SPRITE_ROWS[key], 3);
+}
+
+// ---------- UI / TITLE SPRITES ----------
+
+const CROWN_SPRITE_ROWS = [
+  '..y....y....y..',
+  '.yYy..yYy..yYy.',
+  'yYYYyyYYYyyYYYy',
+  'yYYYYYYYYYYYYYy',
+  'yYyYyyyyyyYyYyY',
+  'yYyYYYyyYYYyYyY',
+  'yyyyyyyyyyyyyyy',
+  'kkkkkkkkkkkkkkk',
+  'krrrrrrrrrrrrrk',
+  'krryyrryyrryyrk',
+  'krryyrryyrryyrk',
+  'krrrrrrrrrrrrrk',
+  'kkkkkkkkkkkkkkk',
+];
+
+function getCrownSprite() {
+  return getSprite('ui_crown', CROWN_SPRITE_ROWS, 4);
+}
+
+// ---------- TILE SPRITES (16 x 16, drawn at TILE_SIZE=32 → scale 2) ----------
+
+const TILE_SPRITE_ROWS = {
+  grass: [
+    'aaaaaaaaaaaaaaaa',
+    'aaaaaGGaaaaaaaG',
+    'aaGGaGGGGaaaaaa',
+    'aaGGGGGaaaGGaaa',
+    'aaaaGGGaaGGGGaa',
+    'aaaaaaaGGGGGaaa',
+    'aaGGGGGaaaaaaaG',
+    'aGGGGGGGGGaaaaa',
+    'aGaaaGGGGGGaaaG',
+    'aaGGGGGGGaaaaaa',
+    'aaaaGGGGGGGGaaa',
+    'aaaGGGGaaaaGGaa',
+    'aaaaGGGGGGGGGGa',
+    'aaaaaaGGGGGGGaa',
+    'aaGGGGGGGGaaaaa',
+    'aaaGGGaaaaaaaGG',
+  ],
+  floor: [
+    'dddddddddddddddd',
+    'dggddggddggddggd',
+    'dggddggddggddggd',
+    'dddddddddddddddd',
+    'ddggddggddggddgg',
+    'ddggddggddggddgg',
+    'dddddddddddddddd',
+    'dggddggddggddggd',
+    'dggddggddggddggd',
+    'dddddddddddddddd',
+    'ddggddggddggddgg',
+    'ddggddggddggddgg',
+    'dddddddddddddddd',
+    'dggddggddggddggd',
+    'dggddggddggddggd',
+    'dddddddddddddddd',
+  ],
+  wall: [
+    'kkkkkkkkkkkkkkkk',
+    'kmmmmmmmmmmmmmmk',
+    'kmmmmmmmmmmmmmmk',
+    'kmmmmmmmmmmmmmmk',
+    'kmmmkkkkkkkkmmmk',
+    'kmmmkkkkkkkkmmmk',
+    'kmmmkkkkkkkkmmmk',
+    'kmmmkkkkkkkkmmmk',
+    'kmmmkkkkkkkkmmmk',
+    'kmmmkkkkkkkkmmmk',
+    'kmmmkkkkkkkkmmmk',
+    'kmmmkkkkkkkkmmmk',
+    'kmmmkkkkkkkkmmmk',
+    'kmmmmmmmmmmmmmmk',
+    'kmmmmmmmmmmmmmmk',
+    'kkkkkkkkkkkkkkkk',
+  ],
+  water: [
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+  ],
+  water_foam: [
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqwwqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqwwqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqwwqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qwwqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqwwqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+    'qqqwwqqqqqqqqqqq',
+    'qqqqqqqqqqqqqqqq',
+  ],
+  tree: [
+    '....tttttttt....',
+    '..tttttttttttt..',
+    '.ttttTTTTTTtttt.',
+    'ttttTTTTTTTTttt.',
+    'tttTTTTTTTTTTttt',
+    'tttTTTTTTTTTTttt',
+    'ttTTTTTTTTTTTTtt',
+    'ttTTTTkTTTTTTTtt',
+    'ttTTTTTTTTTTTTtt',
+    '.tttTTTTTTTTttt.',
+    '.ttttTTTTTTtttt.',
+    '..ttttTTTTtttt..',
+    '....uuuuuuuu....',
+    '....uUUUUUUu....',
+    '....uUUUUUUu....',
+    '....uuuuuuuu....',
+  ],
+  flower: [
+    'aaaaaaaaaaaaaaaa',
+    'aaGGaaaGGGaaaaaa',
+    'aGGGGaaGGGaaGGaa',
+    'aaaaGGGGGGaGGGaa',
+    'aaGGaaGGGGGGGGaa',
+    'aGGGGGGGGGGGGGaa',
+    'aaaaaGGGGGGGGaaa',
+    'aaGGGGGGGGGGGaaa',
+    'aGGGGGGGGGGGaaaa',
+    'aaaaGGGGGGGGaaaa',
+    'aaGGGGGGGGGGaaaa',
+    'aGGGGGGGGGGaaaaa',
+    'aaaaGGGGGGGaaaaa',
+    'aaGGGGGGGGGGaaaa',
+    'aGGGGGGGGGGaaaaa',
+    'aaaaGGGGGGGaaaaa',
+  ],
+  rock: [
+    '........kk......',
+    '......kkkkkk....',
+    '.....kgggggk....',
+    '....kgggggggk...',
+    '...kgggggggggk..',
+    '..kgggggggggggk.',
+    '..kgggggggggggk.',
+    '..kgggggggggggk.',
+    '..kgggggggggggk.',
+    '..kgggggggggggk.',
+    '..kgggggggggggk.',
+    '..kgggggggggggk.',
+    '...kkkkkkkkkk...',
+    '....kk....kk....',
+    '................',
+    '................',
+  ],
+  path: [
+    'uuuuuuuuuuuuuuuu',
+    'uuuuuuuuuuuuuuuu',
+    'uuuuuuuuuuuuuuuu',
+    'uuuUuuuuuuuuuuuu',
+    'uuuuuuuuUuuuuuuu',
+    'uuuuuuuuuuuuuuuu',
+    'uuuuuuUuuuuuuuuu',
+    'uUuuuuuuuuuuuuuu',
+    'uuuuuuuuuuuuUuuu',
+    'uuuuuuUuuuuuuuuu',
+    'uuuuuuuuuuuuuuuu',
+    'uuuuuuuuuuUuuuuu',
+    'uuUuuuuuuuuuuuuu',
+    'uuuuuuuuuuuuuuuu',
+    'uuuuuuUuuuuuuuuu',
+    'uuuuuuuuuuuuuuuu',
+  ],
+  bridge: [
+    'kkkkkkkkkkkkkkkk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kUuUuUuUuUuUuUuk',
+    'kuuuuuuuuuuuuuuk',
+    'kUuUuUuUuUuUuUuk',
+    'kuuuuuuuuuuuuuuk',
+    'kUuUuUuUuUuUuUuk',
+    'kuuuuuuuuuuuuuuk',
+    'kUuUuUuUuUuUuUuk',
+    'kuuuuuuuuuuuuuuk',
+    'kUuUuUuUuUuUuUuk',
+    'kuuuuuuuuuuuuuuk',
+    'kUuUuUuUuUuUuUuk',
+    'kuuuuuuuuuuuuuuk',
+    'kkkkkkkkkkkkkkkk',
+  ],
+  door: [
+    'kkkkkkkkkkkkkkkk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kyyyyyyyyyyyyyyk',
+    'kkkkkkkkkkkkkkkk',
+  ],
+  chest: [
+    '................',
+    '..kkkkkkkkkkkk..',
+    '.kYYYYYYYYYYYYk.',
+    '.kYkkkkkkkkkkYk.',
+    '.kYkxxxxxxxxkYk.',
+    '.kYkxxxxxxxxkYk.',
+    '.kYkxxxxxxxxkYk.',
+    '.kYkxxxxxxxxkYk.',
+    '.kYkkkkkkkkkkYk.',
+    '.kYYYYYYYYYYYYk.',
+    '.kyyyyyyyyyyyyk.',
+    '.kkkkkkkkkkkkkk.',
+    '..kkkkkkkkkkkk..',
+    '..kk........kk..',
+    '................',
+    '................',
+  ],
+  sign: [
+    '................',
+    '......uuuu......',
+    '.....uuuuuu.....',
+    '.....uyyuUu.....',
+    '.....uuyuUu.....',
+    '.....uyyyUu.....',
+    '.....uuuuuu.....',
+    '......uuuu......',
+    '.......uu.......',
+    '.......uu.......',
+    '.......uu.......',
+    '.......uu.......',
+    '.......uu.......',
+    '................',
+    '................',
+    '................',
+  ],
+  craft: [
+    '................',
+    '.....kkkk.......',
+    '....kggggk......',
+    '...kggggggk.....',
+    '..kggggggggk....',
+    '..kggggggggk....',
+    '..kggggggggk....',
+    '..kggggggggk....',
+    '..kggggggggk....',
+    '..kggggggggk....',
+    '..kggggggggk....',
+    '..kkkkkkkkkk....',
+    '..kk....kk......',
+    '..kk....kk......',
+    '................',
+    '................',
+  ],
+  shop: [
+    '................',
+    '.kkkkkkkkkkkkk..',
+    '.kuuuuuuuuuuuk..',
+    '.kuuuuuuuuuuuk..',
+    '.kuuuuuuuuuuuk..',
+    '.kuuuyyuUuuuk..',
+    '.kuuuyyUuuuuk..',
+    '.kuuuuuuuuuuuk..',
+    '.kuuuuuuuuuuuk..',
+    '.kuuuuuuuuuuuk..',
+    '.kuuuuuuuuuuuk..',
+    '.kuuuuuuuuuuuk..',
+    '.kkkkkkkkkkkkk..',
+    '................',
+    '................',
+    '................',
+  ],
+  waystone: [
+    '................',
+    '......kkkk......',
+    '.....kYYYYk.....',
+    '....kYYYYYYk....',
+    '....kYYkkYYk....',
+    '....kYYkkYYk....',
+    '....kYYYYYYk....',
+    '.....kYYYYk.....',
+    '......kkkk......',
+    '......kqqk......',
+    '......kqqk......',
+    '......kqqk......',
+    '......kqqk......',
+    '......kqqk......',
+    '......kkkk......',
+    '................',
+  ],
+  save: [
+    '................',
+    '................',
+    '..kkkkkkkkkk....',
+    '..kYYYYYYYYk....',
+    '..kYyYYYYYk.....',
+    '..kYYyYYYk......',
+    '..kYYYyYk.......',
+    '..kYYYYYk.......',
+    '..kYYYYYk.......',
+    '..kYYYYYk.......',
+    '..kYYYYYk.......',
+    '..kYYYYYk.......',
+    '..kkkkkkkk......',
+    '................',
+    '................',
+    '................',
+  ],
+  stairs_down: [
+    'kkkkkkkkkkkkkkkk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuUuk',
+    'kuuuuuuuuuuUuuuk',
+    'kuuuuuuuuUuuuuuk',
+    'kuuuuuuUuuuuuuuk',
+    'kuuuuUuuuuuuuuuk',
+    'kuuUuuuuuuuuuuuk',
+    'kUuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kuuuuuuuuuuuuuuk',
+    'kyyyyyyyyyyyyyyk',
+    'kkkkkkkkkkkkkkkk',
+  ],
+  boss: [
+    '................',
+    '................',
+    '...rrrrrrrrrr...',
+    '..rrrrrrrrrrrr..',
+    '..rrkkrrrrkkrr..',
+    '..rrkrrrrrrkrr..',
+    '..rrrrrrrrrrrr..',
+    '..rrrrrrrrrrrr..',
+    '..rrrrrrrrrrrr..',
+    '..rrrrrrrrrrrr..',
+    '...rrrrrrrrrr...',
+    '....rrrrrrrr....',
+    '.....rrrrrr.....',
+    '................',
+    '................',
+    '................',
+  ],
+};
+
+const TILE_SPRITES = {};
+function getTileSprite(tileType) {
+  const key = 'tile_' + tileType;
+  if (!_spriteCache[key]) {
+    // Water gets two frames for animation
+    if (tileType === 'water') {
+      const frameA = makeSprite(TILE_SPRITE_ROWS.water, 2);
+      const frameB = makeSprite(TILE_SPRITE_ROWS.water_foam, 2);
+      _spriteCache[key] = { a: frameA, b: frameB };
+    } else {
+      _spriteCache[key] = makeSprite(TILE_SPRITE_ROWS[tileType] || TILE_SPRITE_ROWS.grass, 2);
+    }
+  }
+  return _spriteCache[key];
+}
+
+// Map tile enum -> sprite key
+const TILE_SPRITE_MAP = {
+  0: 'floor',       // FLOOR
+  1: 'wall',        // WALL
+  2: 'tree',        // TREE
+  3: 'water',       // WATER
+  4: 'door',        // DOOR
+  5: 'chest',       // CHEST
+  6: 'floor',       // NPC (drawn separately)
+  7: 'sign',        // SIGN
+  8: 'stairs_down', // STAIRS_DOWN
+  9: 'floor',       // STAIRS_UP
+  10: 'floor',      // CHEST_OPEN
+  11: 'craft',      // CRAFT
+  12: 'shop',       // SHOP
+  13: 'boss',       // BOSS
+  14: 'waystone',   // WAYSTONE
+  15: 'save',       // SAVE
+  16: 'grass',      // GRASS
+  17: 'flower',     // FLOWER
+  18: 'rock',       // ROCK
+  19: 'bridge',     // BRIDGE
+  20: 'path',       // PATH
+  21: 'door',       // DOOR_LOCK
+  22: 'floor',      // VOID
+};// === world.js ===
 // ==========================================
 // Chronicles of the Fallen Crown - World System
 // ==========================================
@@ -2715,46 +3718,31 @@ class World {
         const screenX = x * TILE_SIZE - cameraX;
         const screenY = y * TILE_SIZE - cameraY;
 
-        // Base color
-        let color = TILE_COLORS[tile] || '#333';
+        // Draw pixel-art tile sprite
+        const spriteKey = TILE_SPRITE_MAP[tile] || 'grass';
+        const tileSprite = getTileSprite(spriteKey);
 
-        // Animate certain tiles
-        if (tile === T.WATER) {
-          const wave = Math.sin(this.animTime * 2 + x * 0.5 + y * 0.3) * 20;
-          color = this.adjustColor(color, wave);
-        } else if (tile === T.FLOWER) {
-          const bright = Math.sin(this.animTime * 3 + x + y) * 10;
-          color = this.adjustColor(color, bright);
-        } else if (tile === T.WAYSTONE) {
-          const glow = Math.sin(this.animTime * 4) * 30 + 20;
-          color = this.adjustColor('#3a5a9a', glow);
-        } else if (tile === T.SAVE) {
-          const glow = Math.sin(this.animTime * 3 + 1) * 20 + 10;
-          color = this.adjustColor('#2a6a4a', glow);
-        } else if (tile === T.CHEST) {
-          color = '#c0a030';
-        } else if (tile === T.CHEST_OPEN) {
-          color = '#6a6a30';
-        } else if (tile === T.BOSS) {
-          const pulse = Math.sin(this.animTime * 3) * 30;
-          color = this.adjustColor('#8a1a1a', pulse);
+        // Water animation (two frames)
+        if (spriteKey === 'water') {
+          const frame = (Math.floor(this.animTime * 4 + x + y) % 2 === 0) ? tileSprite.a : tileSprite.b;
+          drawSprite(ctx, frame, screenX, screenY, TILE_SIZE, TILE_SIZE);
+        } else {
+          drawSprite(ctx, tileSprite, screenX, screenY, TILE_SIZE, TILE_SIZE);
         }
 
-        // Draw tile
-        ctx.fillStyle = color;
-        ctx.fillRect(screenX, screenY, TILE_SIZE, TILE_SIZE);
-
-        // Add subtle grid lines
-        ctx.strokeStyle = 'rgba(0,0,0,0.15)';
-        ctx.strokeRect(screenX, screenY, TILE_SIZE, TILE_SIZE);
-
-        // Draw special tile indicators
-        const emoji = TILE_EMOJIS[tile];
-        if (emoji) {
-          ctx.font = '18px serif';
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillText(emoji, screenX + TILE_SIZE / 2, screenY + TILE_SIZE / 2);
+        // Glow overlays for special tiles
+        if (tile === T.WAYSTONE) {
+          const glow = Math.sin(this.animTime * 4) * 30 + 20;
+          ctx.fillStyle = 'rgba(58,90,154,' + (glow / 255) + ')';
+          ctx.fillRect(screenX, screenY, TILE_SIZE, TILE_SIZE);
+        } else if (tile === T.SAVE) {
+          const glow = Math.sin(this.animTime * 3 + 1) * 20 + 10;
+          ctx.fillStyle = 'rgba(42,106,74,' + (glow / 255) + ')';
+          ctx.fillRect(screenX, screenY, TILE_SIZE, TILE_SIZE);
+        } else if (tile === T.BOSS) {
+          const pulse = Math.sin(this.animTime * 3) * 0.2 + 0.2;
+          ctx.fillStyle = 'rgba(138,26,26,' + pulse + ')';
+          ctx.fillRect(screenX, screenY, TILE_SIZE, TILE_SIZE);
         }
       }
     }
@@ -2768,8 +3756,8 @@ class World {
         // NPC body
         ctx.font = '22px serif';
         ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(npc.emoji, screenX + TILE_SIZE / 2, screenY + TILE_SIZE / 2);
+        // NPC pixel-art sprite
+        drawSprite(ctx, getNpcSprite(npc.id), screenX + 2, screenY, TILE_SIZE - 4, TILE_SIZE - 2);
 
         // Name label
         ctx.font = '10px sans-serif';
@@ -2798,11 +3786,10 @@ class World {
     ctx.ellipse(playerScreenX + TILE_SIZE / 2, playerScreenY + TILE_SIZE - 2, 10, 4, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    // Player emoji
-    ctx.font = '24px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('⚔️', playerScreenX + TILE_SIZE / 2, playerScreenY + TILE_SIZE / 2 + bobY);
+    // Player pixel-art sprite (party leader)
+    const leaderId = state.activePartyMembers && state.activePartyMembers[0] ? state.activePartyMembers[0] : 'cedric';
+    drawSprite(ctx, getCharacterSprite(leaderId),
+      playerScreenX + TILE_SIZE / 2 - 18, playerScreenY + TILE_SIZE / 2 - 22 + bobY, 36, 45);
 
     // Direction indicator
     const dirOffsets = { up: [0, -10], down: [0, 10], left: [-10, 0], right: [10, 0] };
@@ -3026,6 +4013,11 @@ class BattleSystem {
 
     this.isBoss = this.enemies.some(e => e.isBoss);
 
+    // Build turn order immediately so combat starts properly
+    this._party = state.party;
+    this._activePartyMembers = state.activePartyMembers;
+    this.calculateTurnOrder(this._activePartyMembers, this._party);
+
     this.addLog(`Battle Start! ${this.enemies.map(e => e.name).join(' + ')}`, 'system');
     this.phase = 'player_select';
 
@@ -3040,6 +4032,7 @@ class BattleSystem {
   // ============ TURN ORDER ============
   calculateTurnOrder(activePartyMembers, party) {
     const combatants = [];
+    if (!activePartyMembers || !party) return;
 
     // Player characters
     for (const id of activePartyMembers) {
@@ -3532,6 +4525,24 @@ class BattleSystem {
       if (enemy.hitAnim > 0) enemy.hitAnim--;
     }
 
+    // Auto-drive enemy turns
+    if (this.phase === 'enemy_turn') {
+      if (this.enemyDelay === undefined) this.enemyDelay = 40;
+      this.enemyDelay--;
+      if (this.enemyDelay <= 0) {
+        this.enemyDelay = undefined;
+        this.executeEnemyTurn(this._party, this._activePartyMembers);
+      }
+    }
+
+    // If battle starts on an enemy's turn, enter enemy_turn phase
+    if (this.phase === 'player_select') {
+      const cc = this.getCurrentCombatant();
+      if (cc && cc.type === 'enemy') {
+        this.phase = 'enemy_turn';
+      }
+    }
+
     // Update result phase timer
     if (this.phase === 'result') {
       this.animTimer--;
@@ -3628,18 +4639,14 @@ class BattleSystem {
         ctx.globalAlpha = 0.7 + Math.sin(enemy.hitAnim * 2) * 0.3;
       }
 
-      // Enemy body
+      // Enemy pixel-art sprite
       const bodySize = enemy.isBoss ? 90 : 60;
-      ctx.fillStyle = enemy.color;
-      ctx.beginPath();
-      ctx.arc(x, y, bodySize / 2, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Enemy emoji
-      ctx.font = `${enemy.isBoss ? 48 : 36}px serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(enemy.emoji, x, y);
+      const spr = getEnemySprite(enemy.id);
+      const sprW = spr.width;
+      const sprH = spr.height;
+      const targetH = enemy.isBoss ? 84 : 56;
+      const targetW = sprW * (targetH / sprH);
+      drawSprite(ctx, spr, x - targetW / 2, y - targetH / 2, targetW, targetH);
 
       // Boss glow
       if (enemy.isBoss) {
@@ -3731,15 +4738,8 @@ class BattleSystem {
         ctx.globalAlpha = 0.3;
       }
 
-      // Character sprite
-      ctx.fillStyle = member.color;
-      ctx.beginPath();
-      ctx.arc(x, y, 20, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.font = '24px serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(member.emoji, x, y);
+      // Character pixel-art sprite
+      drawSprite(ctx, getCharacterSprite(id), x - 22, y - 30, 44, 55);
 
       if (isActive) {
         ctx.strokeStyle = '#d4af37';
@@ -4300,6 +5300,7 @@ class Game {
     this.menuOpen = false;
     this.craftingOpen = false;
     this.shopOpen = false;
+    this.showErrorLog = false;
 
     this.lastTime = 0;
     this.running = false;
@@ -4310,7 +5311,7 @@ class Game {
   setupInput() {
     window.addEventListener('keydown', (e) => {
       this.keys[e.key] = true;
-      this.handleKeyPress(e.key);
+      try { this.handleKeyPress(e.key); } catch(err) { _logError('KEY_INPUT', err.message, err); _showErrorOverlay(err.message); }
     });
 
     window.addEventListener('keyup', (e) => {
@@ -4321,7 +5322,7 @@ class Game {
       const rect = this.canvas.getBoundingClientRect();
       const x = (e.clientX - rect.left) * (W / rect.width);
       const y = (e.clientY - rect.top) * (H / rect.height);
-      this.handleClick(x, y);
+      try { this.handleClick(x, y); } catch(err) { _logError('CLICK_INPUT', err.message, err); _showErrorOverlay(err.message); }
     });
   }
 
@@ -4338,8 +5339,16 @@ class Game {
     const dt = (now - this.lastTime) / 1000;
     this.lastTime = now;
 
-    this.update(dt);
-    this.render();
+    try {
+      this.update(dt);
+    } catch(e) {
+      _logError('UPDATE', e.message, e);
+    }
+    try {
+      this.render();
+    } catch(e) {
+      _logError('RENDER', e.message, e);
+    }
 
     requestAnimationFrame(() => this.gameLoop());
   }
@@ -4782,6 +5791,15 @@ class Game {
 
   // ============ INPUT HANDLING ============
   handleKeyPress(key) {
+    // F1: Toggle error log display
+    if (key === 'F1') {
+      this.showErrorLog = !this.showErrorLog;
+      if (this.showErrorLog) {
+        console.log('[DEBUG] Error log (' + _errorLog.length + ' entries):', _errorLog);
+      }
+      return;
+    }
+
     if (this.state.screen === 'title') {
       if (key === 'Enter') {
         this.state.screen = 'prologue';
@@ -5076,6 +6094,11 @@ class Game {
 
     // Notifications (always on top)
     this.renderNotifications();
+
+    // Error log overlay (F1 toggle)
+    if (this.showErrorLog) {
+      this.renderErrorLog();
+    }
   }
 
   renderTitleScreen() {
@@ -5099,11 +6122,10 @@ class Game {
       ctx.fillRect(sx, sy, 2, 2);
     }
 
-    // Crown emoji
-    ctx.font = '64px serif';
-    ctx.textAlign = 'center';
-    const crownY = 180 + Math.sin(Date.now() * 0.002) * 8;
-    ctx.fillText('👑', W / 2, crownY);
+    // Pixel crown
+    const crownY = 130 + Math.sin(Date.now() * 0.002) * 8;
+    const crownSprite = getCrownSprite();
+    drawSprite(ctx, crownSprite, W / 2 - 52, crownY, 104, 78);
 
     // Title
     ctx.font = 'bold 36px serif';
@@ -5222,15 +6244,8 @@ class Game {
       const member = this.state.party[id];
       if (!member) continue;
 
-      // Portrait circle
-      ctx.fillStyle = member.color;
-      ctx.beginPath();
-      ctx.arc(x + 14, 22, 14, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.font = '14px serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(member.emoji, x + 14, 23);
+      // Portrait sprite
+      drawSprite(ctx, getCharacterSprite(id), x + 2, 10, 24, 30);
 
       // Name & bars
       ctx.font = '10px sans-serif';
@@ -5627,14 +6642,8 @@ class Game {
       ctx.roundRect(200, cy, 720, 64, 6);
       ctx.fill();
 
-      // Portrait
-      ctx.fillStyle = member.color;
-      ctx.beginPath();
-      ctx.arc(240, cy + 32, 24, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.font = '24px serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(member.emoji, 240, cy + 34);
+      // Portrait sprite
+      drawSprite(ctx, getCharacterSprite(id), 240 - 28, cy + 32 - 35, 56, 70);
 
       // Name & class
       ctx.font = 'bold 14px sans-serif';
@@ -5972,6 +6981,42 @@ class Game {
       ctx.globalAlpha = 1;
       ny += 40;
     }
+  }
+
+  // ============ ERROR LOG DISPLAY ============
+  renderErrorLog() {
+    if (_errorLog.length === 0) return;
+    const ctx = this.ctx;
+    const x = 16;
+    let y = H - 16;
+
+    // Draw from bottom up, most recent first
+    const toShow = _errorLog.slice(-8).reverse();
+    for (let i = 0; i < toShow.length; i++) {
+      const entry = toShow[i];
+      const alpha = 1 - (i * 0.1);
+      ctx.globalAlpha = alpha * 0.85;
+      ctx.fillStyle = 'rgba(40,0,0,0.9)';
+      ctx.beginPath();
+      ctx.roundRect(x, y - 24, 500, 22, 3);
+      ctx.fill();
+
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#ff6b6b';
+      ctx.fillText('[' + entry.time + '] ' + entry.source + ': ' + entry.message.slice(0, 70), x + 6, y - 8);
+      ctx.globalAlpha = 1;
+      y -= 26;
+    }
+  }
+
+  // ============ DEBUG HELPERS ============
+  getErrorLog() {
+    return _errorLog.slice();
+  }
+
+  clearErrorLog() {
+    _errorLog.length = 0;
   }
 }
 
