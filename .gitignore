@@ -1,0 +1,35 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Node
+node_modules/
+
+# Unity
+engine/unity/Library/
+engine/unity/Temp/
+engine/unity/Obj/
+engine/unity/Build/
+engine/unity/Builds/
+engine/unity/Logs/
+engine/unity/UserSettings/
+engine/unity/*.csproj
+engine/unity/*.sln
+engine/unity/*.suo
+engine/unity/*.user
+engine/unity/*.pidb
+engine/unity/*.booproj
+engine/unity/*.unityproj
+
+# Godot
+engine/godot/.godot/
+engine/godot/*.import
+
+# Freebuff
+.freebuff/
