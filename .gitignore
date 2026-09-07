@@ -27,6 +27,22 @@ engine/unity/*.pidb
 engine/unity/*.booproj
 engine/unity/*.unityproj
 
+# Unity 3D (new project)
+engine/unity3d/Library/
+engine/unity3d/Temp/
+engine/unity3d/Obj/
+engine/unity3d/Build/
+engine/unity3d/Builds/
+engine/unity3d/Logs/
+engine/unity3d/UserSettings/
+engine/unity3d/*.csproj
+engine/unity3d/*.sln
+engine/unity3d/*.suo
+engine/unity3d/*.user
+engine/unity3d/*.pidb
+engine/unity3d/*.booproj
+engine/unity3d/*.unityproj
+
 # Godot
 engine/godot/.godot/
 engine/godot/*.import
