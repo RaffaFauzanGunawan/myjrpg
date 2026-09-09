@@ -240,14 +240,26 @@ function setupWorld() {
   });
   bossActors.forEach((b) => { b.mesh.visible = b.alive; });
 
-  // musuh liar tersebar
+  // musuh liar tersebar (jangan di dalam pohon/danau/kota)
   enemies = [];
   const rng = Math.random;
-  for (let i = 0; i < 34; i++) {
-    const x = 20 + Math.floor(rng() * (CFG.WORLD_SIZE - 40));
-    const z = 20 + Math.floor(rng() * (CFG.WORLD_SIZE - 40));
+  const blockedSpawn = (x, z) => {
     const bio = world.biomeAt(x, z);
-    if (bio === BIOME.CITY || bio === BIOME.LAKE) continue;
+    if (bio === BIOME.CITY || bio === BIOME.LAKE) return true;
+    const gy = world.groundY(x, z);
+    const fy = Math.floor(gy);
+    const t1 = world.blockAt(x, fy + 1, z);
+    const t2 = world.blockAt(x, fy + 2, z);
+    return t1 === 5 || t1 === 12 || t1 === 13 || t1 === 16 || t2 === 5 || t2 === 12 || t2 === 13 || t2 === 16;
+  };
+  for (let i = 0; i < 34; i++) {
+    let x = 0, z = 0;
+    for (let tries = 0; tries < 40; tries++) {
+      x = 20 + Math.floor(rng() * (CFG.WORLD_SIZE - 40));
+      z = 20 + Math.floor(rng() * (CFG.WORLD_SIZE - 40));
+      if (!blockedSpawn(x, z)) break;
+    }
+    const bio = world.biomeAt(x, z);
     const table = ENCOUNTER_TABLES[bio === BIOME.SNOW ? 'snow' : bio === BIOME.ASH ? 'ash' : bio === BIOME.BEACH ? 'beach' : 'forest'];
     const roll = rng();
     let acc = 0, pick = table[0];
@@ -543,6 +555,7 @@ function boot() {
       { x: 84, z: 132 }, // spawn awal
     ],
   });
+  engine.world = world; // untuk anti-clip kamera
   ui = new UI(engine.audio);
   battle = new Battle(engine.audio);
 

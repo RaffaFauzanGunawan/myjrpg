@@ -11,6 +11,12 @@ const S = CFG.WORLD_SIZE;
 const CS = CFG.CHUNK_SIZE;
 const SEED = 1337;
 
+// geometry dasar untuk vegetasi & kristal (dibuat sekali, dipakai semua chunk)
+let _sph = null, _cyl = null, _oct = null;
+function getSphereGeo() { if (!_sph) _sph = new THREE.IcosahedronGeometry(0.5, 1); return _sph; }
+function getCylGeo() { if (!_cyl) _cyl = new THREE.CylinderGeometry(0.2, 0.28, 1, 6, 1); return _cyl; }
+function getOctGeo() { if (!_oct) _oct = new THREE.OctahedronGeometry(0.5, 0); return _oct; }
+
 export class World {
   constructor(engine, opts = {}) {
     this.engine = engine;
@@ -26,9 +32,8 @@ export class World {
     this.block = new Uint8Array(S * S * (CFG.MAX_HEIGHT + 2)); // isi blok (0 = kosong, 1..n = tipe)
     this.decorations = [];                    // hiasan dunia (batu, semak, bunga)
 
-    // cache warna per-vertex
-    this.chunks = new Map();   // key -> THREE.Mesh
-    this.chunkGeo = new Map(); // key -> BufferGeometry (untuk dispose)
+    // cache per-chunk
+    this.chunks = new Map();   // key -> { meshes, geos }
 
     this._generate();
     this._populate();
@@ -391,12 +396,12 @@ export class World {
     return below;
   }
 
-  // tinggi lantai pertama yang solid dari atas (untuk spawn entity)
+  // tinggi lantai untuk entity — mengikuti permukaan halus (sama dengan mesh)
   groundY(x, z) {
     const h = this.heightAt(x, z);
     const bio = this.biome[this.idx(Math.round(x), Math.round(z))];
     if (bio === BIOME.LAKE) return h + 1; // jangan spawn di danau
-    return h + 1;
+    return this._smooth(x, z) + 1;
   }
 
   biomeAt(x, z) {
@@ -406,116 +411,240 @@ export class World {
   }
 
   // ================= MESHING =================
-  // warna blok dengan variasi acak deterministik
+  // ketinggian halus (box blur 4 tile) untuk permukaan yang bergelombang
+  _smooth(x, z) {
+    const gx = Math.max(0, Math.min(S - 2, Math.round(x)));
+    const gz = Math.max(0, Math.min(S - 2, Math.round(z)));
+    return (this.height[this.idx(gx, gz)] + this.height[this.idx(gx + 1, gz)]
+      + this.height[this.idx(gx, gz + 1)] + this.height[this.idx(gx + 1, gz + 1)]) / 4;
+  }
+
+  // warna blok (bangunan/pohon) — variasi deterministik
   _blockColor(t, x, y, z) {
     const palettes = {
-      1: TILE_PALETTES.grass, 2: TILE_PALETTES.dirt, 3: TILE_PALETTES.stone,
-      4: TILE_PALETTES.water, 5: TILE_PALETTES.wood, 6: TILE_PALETTES.snow,
-      7: TILE_PALETTES.ash, 8: TILE_PALETTES.sand, 9: TILE_PALETTES.leaf,
-      10: TILE_PALETTES.dirt, 11: TILE_PALETTES.crystal,
-      12: TILE_PALETTES.wall, 13: TILE_PALETTES.roof, 14: TILE_PALETTES.path,
-      15: TILE_PALETTES.snowLeaf, 16: TILE_PALETTES.dirt,
+      5: TILE_PALETTES.wood, 9: TILE_PALETTES.leaf, 11: TILE_PALETTES.crystal,
+      12: TILE_PALETTES.wall, 13: TILE_PALETTES.roof, 15: TILE_PALETTES.snowLeaf,
+      16: TILE_PALETTES.dirt, 3: TILE_PALETTES.stone,
     };
     const pal = palettes[t] || TILE_PALETTES.stone;
-    // variasi halus berdasarkan posisi (deterministik)
     const v = ((x * 7 + z * 13 + y * 3) % pal.length + pal.length) % pal.length;
     return new THREE.Color(pal[v]);
   }
 
-  // buat mesh untuk satu chunk
+  // warna permukaan terrain per vertex — bioma + lereng + ketinggian + jalan
+  _terrainColor(x, z, h) {
+    const gx = Math.max(0, Math.min(S - 1, Math.round(x)));
+    const gz = Math.max(0, Math.min(S - 1, Math.round(z)));
+    const bio = this.biome[this.idx(gx, gz)];
+    const hm = this.height[this.idx(gx, gz)];
+    const hL = gx > 0 ? this.height[this.idx(gx - 1, gz)] : hm;
+    const hR = gx < S - 1 ? this.height[this.idx(gx + 1, gz)] : hm;
+    const hU = gz > 0 ? this.height[this.idx(gx, gz - 1)] : hm;
+    const hD = gz < S - 1 ? this.height[this.idx(gx, gz + 1)] : hm;
+    const slope = Math.max(Math.abs(hL - hm), Math.abs(hR - hm), Math.abs(hU - hm), Math.abs(hD - hm));
+    // variasi halus per posisi
+    const v = ((gx * 7 + gz * 13) % 3) / 100 - 0.015;
+
+    // jalan (blok path di permukaan)
+    if (this.block[this.bIdx(gx, hm, gz)] === 14) {
+      const p = TILE_PALETTES.path[((gx + gz) % 3 + 3) % 3];
+      const c = new THREE.Color(p).offsetHSL(0, 0, v);
+      return c;
+    }
+
+    let base;
+    if (bio === BIOME.CITY) base = TILE_PALETTES.wall[0];
+    else if (bio === BIOME.SNOW) base = hm >= 10 ? TILE_PALETTES.snow[0] : TILE_PALETTES.stone[0];
+    else if (bio === BIOME.ASH) base = TILE_PALETTES.ash[0];
+    else if (bio === BIOME.BEACH) base = TILE_PALETTES.sand[0];
+    else if (bio === BIOME.LAKE) base = '#6a5a48';
+    else base = slope >= 2 ? TILE_PALETTES.stone[0] : TILE_PALETTES.grass[0];
+    return new THREE.Color(base).offsetHSL(0, 0, v + (bio === BIOME.FOREST ? (h - hm) * 0.05 : 0));
+  }
+
+  // buat mesh untuk satu chunk: terrain halus + air + struktur (blok)
   _buildChunk(cx, cz) {
-    const key = cx + ',' + cz;
     const x0 = cx * CS, z0 = cz * CS;
-    const positions = [], colors = [], normals = [], indices = [];
-    let vertCount = 0;
-    const DIRT_C = new THREE.Color(TILE_PALETTES.dirt[0]);
+    const meshes = [], geos = [];
+
+    // ---------- 1) terrain heightfield ----------
+    const tp = [], tc = [], ti = [];
+    for (let gz = 0; gz <= CS; gz++) {
+      for (let gx = 0; gx <= CS; gx++) {
+        const wx = x0 + gx, wz = z0 + gz;
+        const h = this._smooth(wx, wz);
+        tp.push(wx, h, wz);
+        const c = this._terrainColor(wx, wz, h);
+        tc.push(c.r, c.g, c.b);
+      }
+    }
+    for (let gz = 0; gz < CS; gz++) {
+      for (let gx = 0; gx < CS; gx++) {
+        const a = gz * (CS + 1) + gx;
+        const b = a + (CS + 1), c = b + 1, d = a + 1;
+        ti.push(a, b, c, a, c, d);
+      }
+    }
+    const tGeo = new THREE.BufferGeometry();
+    tGeo.setAttribute('position', new THREE.Float32BufferAttribute(tp, 3));
+    tGeo.setAttribute('color', new THREE.Float32BufferAttribute(tc, 3));
+    tGeo.setIndex(ti);
+    tGeo.computeVertexNormals();
+    tGeo.computeBoundingSphere();
+    const tMesh = new THREE.Mesh(tGeo, this._terrainMat());
+    tMesh.receiveShadow = true;
+    meshes.push(tMesh); geos.push(tGeo);
+
+    // ---------- 2) air transparan ----------
+    const wpos = [], wcol = [], widx = [];
+    for (let z = z0; z < z0 + CS; z++) {
+      for (let x = x0; x < x0 + CS; x++) {
+        if (this.biome[this.idx(x, z)] === BIOME.LAKE && this.height[this.idx(x, z)] < CFG.SEA_LEVEL) {
+          const y = CFG.SEA_LEVEL + 0.35;
+          const base = wpos.length / 3;
+          wpos.push(x, y, z, x, y, z + 1, x + 1, y, z + 1, x + 1, y, z);
+          const wv = ((x * 3 + z * 5) % 3) / 60;
+          for (let k = 0; k < 4; k++) wcol.push(0.16 + wv, 0.40 + wv, 0.70 + wv);
+          widx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        }
+      }
+    }
+    if (wpos.length) {
+      const wGeo = new THREE.BufferGeometry();
+      wGeo.setAttribute('position', new THREE.Float32BufferAttribute(wpos, 3));
+      wGeo.setAttribute('color', new THREE.Float32BufferAttribute(wcol, 3));
+      wGeo.setIndex(widx);
+      wGeo.computeBoundingSphere();
+      const wMesh = new THREE.Mesh(wGeo, this._waterMat());
+      meshes.push(wMesh); geos.push(wGeo);
+    }
+
+    // ---------- 3) struktur: pohon bulat, kristal, bangunan kubus ----------
+    const ip = [], ic = [], in_ = [], ii = [];
+    const pushInst = (base, insts) => {
+      const bp = base.attributes.position.array;
+      const bn = base.attributes.normal ? base.attributes.normal.array : null;
+      const bi = base.index ? base.index.array : null;
+      const vCount = base.attributes.position.count;
+      for (const it of insts) {
+        const off = ip.length / 3;
+        for (let v = 0; v < vCount; v++) {
+          ip.push(bp[v * 3] * it.s + it.x, bp[v * 3 + 1] * it.s + it.y, bp[v * 3 + 2] * it.s + it.z);
+          ic.push(it.c.r, it.c.g, it.c.b);
+          if (bn) in_.push(bn[v * 3], bn[v * 3 + 1], bn[v * 3 + 2]);
+        }
+        if (bi) for (let k = 0; k < bi.length; k++) ii.push(bi[k] + off);
+      }
+    };
+    const foliage = [], trunks = [], gems = [];
+    for (let x = x0; x < x0 + CS; x++) {
+      for (let z = z0; z < z0 + CS; z++) {
+        const hm = this.height[this.idx(x, z)];
+        for (let y = hm + 1; y <= CFG.MAX_HEIGHT; y++) {
+          const t = this.block[this.bIdx(x, y, z)];
+          if (!t || t === 4) continue;
+          if (t === 9 || t === 15) {
+            // lewati daun bagian dalam (6 tetangga daun semua) supaya mahkota bulat
+            const L = (dx, dy, dz) => { const v = this.blockAt(x + dx, y + dy, z + dz); return v === 9 || v === 15; };
+            if (L(1, 0, 0) && L(-1, 0, 0) && L(0, 1, 0) && L(0, -1, 0) && L(0, 0, 1) && L(0, 0, -1)) continue;
+            foliage.push({ x: x + 0.5, y: y + 0.5, z: z + 0.5, s: t === 15 ? 0.42 : 0.56, c: this._blockColor(t, x, y, z) });
+          } else if (t === 5 || t === 16) {
+            trunks.push({ x: x + 0.5, y: y + 0.5, z: z + 0.5, s: 0.9, c: this._blockColor(t, x, y, z) });
+          } else if (t === 11) {
+            gems.push({ x: x + 0.5, y: y + 0.5, z: z + 0.5, s: 0.5, c: this._blockColor(t, x, y, z) });
+          }
+        }
+      }
+    }
+    pushInst(getSphereGeo(), foliage);
+    pushInst(getCylGeo(), trunks);
+    pushInst(getOctGeo(), gems);
+    if (ii.length) {
+      const iGeo = new THREE.BufferGeometry();
+      iGeo.setAttribute('position', new THREE.Float32BufferAttribute(ip, 3));
+      iGeo.setAttribute('color', new THREE.Float32BufferAttribute(ic, 3));
+      iGeo.setAttribute('normal', new THREE.Float32BufferAttribute(in_, 3));
+      iGeo.setIndex(ii);
+      iGeo.computeBoundingSphere();
+      const iMesh = new THREE.Mesh(iGeo, this._terrainMat());
+      iMesh.castShadow = true;
+      meshes.push(iMesh); geos.push(iGeo);
+    }
+
+    // bangunan (dinding/atap) & batu tetap kubus
+    const sp = [], sc = [], si = [];
     const dirs = [
       { d: [1, 0, 0], n: [1, 0, 0] }, { d: [-1, 0, 0], n: [-1, 0, 0] },
       { d: [0, 1, 0], n: [0, 1, 0] }, { d: [0, -1, 0], n: [0, -1, 0] },
       { d: [0, 0, 1], n: [0, 0, 1] }, { d: [0, 0, -1], n: [0, 0, -1] },
     ];
-
     for (let x = x0; x < x0 + CS; x++) {
       for (let z = z0; z < z0 + CS; z++) {
-        for (let y = 0; y <= CFG.MAX_HEIGHT; y++) {
+        const hm = this.height[this.idx(x, z)];
+        for (let y = hm + 1; y <= CFG.MAX_HEIGHT; y++) {
           const t = this.block[this.bIdx(x, y, z)];
-          if (!t) continue;
+          if (t !== 12 && t !== 13 && t !== 3) continue;
           const c = this._blockColor(t, x, y, z);
-
-          // lereng curam: rumput di tebing berubah jadi tanah
-          let slopeSteep = false;
-          if (t === 1 && y === this.height[this.idx(x, z)]) {
-            const hm = this.height[this.idx(x, z)];
-            const hL = x > 0 ? this.height[this.idx(x - 1, z)] : hm;
-            const hR = x < S - 1 ? this.height[this.idx(x + 1, z)] : hm;
-            const hU = z > 0 ? this.height[this.idx(x, z - 1)] : hm;
-            const hD = z < S - 1 ? this.height[this.idx(x, z + 1)] : hm;
-            slopeSteep = Math.max(Math.abs(hL - hm), Math.abs(hR - hm), Math.abs(hU - hm), Math.abs(hD - hm)) >= 2;
-          }
-
           for (const { d, n } of dirs) {
             const nx = x + d[0], ny = y + d[1], nz = z + d[2];
             if (!this.solidAt(nx, ny, nz)) {
-              // warna sisi: rumput di lereng -> tanah; sisi yang tertutup blok -> gelap (AO)
-              let fc = c;
-              if (slopeSteep && n[1] === 1) fc = DIRT_C;
-              else if (n[1] === 0 && this.solidAt(x, y + 1, z)) fc = c.clone().multiplyScalar(0.78);
-              const base = positions.length / 3;
+              const fc = (n[1] === 0 && this.solidAt(x, y + 1, z))
+                ? c.clone().multiplyScalar(0.78) : c;
+              const base = sp.length / 3;
               const s = 1;
-              // empat sudut kubus pada sisi d
               let corners;
               if (d[0] !== 0) {
                 const px = x + (d[0] > 0 ? s : 0);
-                corners = [
-                  [px, y, z], [px, y, z + s], [px, y + s, z + s], [px, y + s, z],
-                ];
+                corners = [[px, y, z], [px, y, z + s], [px, y + s, z + s], [px, y + s, z]];
               } else if (d[1] !== 0) {
                 const py = y + (d[1] > 0 ? s : 0);
-                corners = [
-                  [x, py, z], [x + s, py, z], [x + s, py, z + s], [x, py, z + s],
-                ];
+                corners = [[x, py, z], [x + s, py, z], [x + s, py, z + s], [x, py, z + s]];
               } else {
                 const pz = z + (d[2] > 0 ? s : 0);
-                corners = [
-                  [x, y, pz], [x + s, y, pz], [x + s, y + s, pz], [x, y + s, pz],
-                ];
+                corners = [[x, y, pz], [x + s, y, pz], [x + s, y + s, pz], [x, y + s, pz]];
               }
-              // pastikan orientasi CCW menghadap keluar (normal poligon searah n),
-              // kalau tidak, balik urutan sudut supaya sisi tidak ter-cull.
               const p0 = corners[0], p1 = corners[1], p2 = corners[2];
               const wx = (p1[1] - p0[1]) * (p2[2] - p0[2]) - (p1[2] - p0[2]) * (p2[1] - p0[1]);
               const wy = (p1[2] - p0[2]) * (p2[0] - p0[0]) - (p1[0] - p0[0]) * (p2[2] - p0[2]);
               const wz = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p1[1] - p0[1]) * (p2[0] - p0[0]);
               if (wx * n[0] + wy * n[1] + wz * n[2] < 0) corners.reverse();
               for (const cc of corners) {
-                positions.push(cc[0], cc[1], cc[2]);
-                colors.push(fc.r, fc.g, fc.b);
-                normals.push(n[0], n[1], n[2]);
+                sp.push(cc[0], cc[1], cc[2]);
+                sc.push(fc.r, fc.g, fc.b);
               }
-              // dua segitiga
               const a = base;
-              indices.push(a, a + 1, a + 2, a, a + 2, a + 3);
-              vertCount += 4;
+              si.push(a, a + 1, a + 2, a, a + 2, a + 3);
             }
           }
         }
       }
     }
+    if (sp.length) {
+      const sGeo = new THREE.BufferGeometry();
+      sGeo.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+      sGeo.setAttribute('color', new THREE.Float32BufferAttribute(sc, 3));
+      sGeo.setIndex(si);
+      sGeo.computeVertexNormals();
+      sGeo.computeBoundingSphere();
+      const sMesh = new THREE.Mesh(sGeo, this._terrainMat());
+      sMesh.castShadow = true;
+      meshes.push(sMesh); geos.push(sGeo);
+    }
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-    geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-    geo.setIndex(indices);
-    geo.computeBoundingSphere();
+    return { meshes, geos };
+  }
 
-    const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
-    const mesh = new THREE.Mesh(geo, mat);
-    // vertex memakai koordinat dunia absolut; mesh di origin
-    mesh.position.set(0, 0, 0);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    return { mesh, geo };
+  // material bersama (dibuat sekali)
+  _terrainMat() {
+    if (!this._mat) this._mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    return this._mat;
+  }
+  _waterMat() {
+    if (!this._wmat) this._wmat = new THREE.MeshPhongMaterial({
+      vertexColors: true, transparent: true, opacity: 0.68,
+      shininess: 90, specular: 0x99ccff, depthWrite: false,
+    });
+    return this._wmat;
   }
 
   // ================= CHUNK STREAMING =================
@@ -530,19 +659,17 @@ export class World {
         const key = cx + ',' + cz;
         want.add(key);
         if (!this.chunks.has(key)) {
-          const { mesh, geo } = this._buildChunk(cx, cz);
-          this.engine.scene.add(mesh);
-          this.chunks.set(key, mesh);
-          this.chunkGeo.set(key, geo);
+          const { meshes, geos } = this._buildChunk(cx, cz);
+          for (const m of meshes) this.engine.scene.add(m);
+          this.chunks.set(key, { meshes, geos });
         }
       }
     }
     // buang chunk jauh
-    for (const [key, mesh] of this.chunks) {
+    for (const [key, entry] of this.chunks) {
       if (!want.has(key)) {
-        this.engine.scene.remove(mesh);
-        this.chunkGeo.get(key).dispose();
-        this.chunkGeo.delete(key);
+        for (const m of entry.meshes) this.engine.scene.remove(m);
+        for (const g of entry.geos) g.dispose();
         this.chunks.delete(key);
       }
     }

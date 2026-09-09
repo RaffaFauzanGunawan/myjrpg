@@ -186,8 +186,12 @@ export class Engine {
       py + ay * dist,
       target.z + az * dist
     );
-    // cegah kamera masuk ke bawah tanah
+    // cegah kamera masuk ke bawah tanah / menembus bukit
     want.y = Math.max(want.y, target.y + 1.2);
+    if (this.world) {
+      const gy = this.world.groundY(want.x, want.z);
+      want.y = Math.max(want.y, gy + 1.0);
+    }
     this.camera.position.lerp(want, 1 - Math.pow(0.0001, dt));
     this.camera.lookAt(target.x, py, target.z);
   }
