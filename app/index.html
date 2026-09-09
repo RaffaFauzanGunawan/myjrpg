@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chronicles of the Fallen Crown — 3D Pixel</title>
+<link rel="stylesheet" href="css/style.css">
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+
+<!-- ============ 3D VIEWPORT ============ -->
+<div id="viewport"></div>
+
+<!-- ============ LOADING ============ -->
+<div id="loading-screen" class="overlay">
+  <div class="loading-box">
+    <h1>Chronicles of the Fallen Crown</h1>
+    <p class="sub">Membangun dunia voxel…</p>
+    <div class="loading-bar"><div id="loading-fill"></div></div>
+  </div>
+</div>
+
+<!-- ============ TITLE SCREEN ============ -->
+<div id="title-screen" class="overlay hidden">
+  <div class="title-box">
+    <h1 class="game-title">Chronicles<br>of the<br>Fallen Crown</h1>
+    <p class="title-sub">Sebuah JRPG Dunia Terbuka Voxel</p>
+    <button id="btn-new" class="pixel-btn big">▶&nbsp; New Game</button>
+    <button id="btn-continue" class="pixel-btn big hidden">💾&nbsp; Continue</button>
+    <p class="title-hint">WASD gerak · E interaksi · Drag = putar kamera · Scroll = zoom · F5 simpan</p>
+  </div>
+</div>
+
+<!-- ============ HUD ============ -->
+<div id="hud" class="hidden">
+  <div id="party-panel"></div>
+  <div id="clock-label"></div>
+  <canvas id="minimap" width="160" height="160"></canvas>
+  <div id="quest-tracker"></div>
+</div>
+
+<div id="interact-prompt" class="hidden">[E] Interaksi</div>
+<div id="area-toast" class="hidden"></div>
+
+<!-- ============ DIALOG ============ -->
+<div id="dialog-box" class="hidden">
+  <div id="dialog-name"></div>
+  <div id="dialog-text"></div>
+  <div class="dialog-hint">Klik atau Enter untuk lanjut ▸</div>
+</div>
+
+<!-- ============ SHOP ============ -->
+<div id="shop-panel" class="hidden">
+  <h2 id="shop-title">Toko</h2>
+  <div id="shop-gold"></div>
+  <div id="shop-list"></div>
+  <button id="shop-close" class="pixel-btn">Tutup</button>
+</div>
+
+<!-- ============ BATTLE ============ -->
+<div id="battle-overlay" class="overlay hidden">
+  <div id="battle-scene">
+    <div id="battle-enemies"></div>
+    <div id="battle-party"></div>
+    <div id="battle-log"></div>
+    <div id="battle-actions"></div>
+  </div>
+  <div id="battle-banner" class="hidden"></div>
+</div>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
