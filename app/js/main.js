@@ -432,8 +432,9 @@ function update(dt) {
   game.hour += dt * 24 / CFG.DAY_LENGTH;
   if (game.hour >= 24) { game.hour -= 24; game.day++; }
 
-  // input player
-  player.update(dt, engine.keys);
+  // input player (relatif kamera agar kontrol terasa natural)
+  const camYaw = player.model.rotation.y + Math.PI + engine.camYawOffset;
+  player.update(dt, engine.keys, camYaw);
 
   // entitas lain
   for (const n of npcs) n.update(dt);

@@ -4,8 +4,8 @@
   "description": "JRPG Medieval Fantasy - Chronicles of the Fallen Crown",
   "private": true,
   "scripts": {
-    "start": "serve . -l $PORT -s",
-    "dev": "serve . -l 3000 -s"
+    "start": "serve app -l $PORT -s",
+    "dev": "serve app -l 3000 -s"
   },
   "dependencies": {
     "serve": "^14.2.0"

@@ -12,7 +12,7 @@ export class Engine {
     this.container = container;
 
     // ---- renderer ----
-    this.renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
@@ -29,7 +29,7 @@ export class Engine {
     // ---- lights ----
     this.sun = new THREE.DirectionalLight(0xfff2d9, 1.25);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024);
+    this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.camera.near = 2;
     this.sun.shadow.camera.far = 60;
     const sc = this.sun.shadow.camera;
@@ -168,7 +168,7 @@ export class Engine {
   follow(target, dt, yaw) {
     const yawCam = (yaw != null ? yaw : 0) + Math.PI + this.camYawOffset;
     // sinyal balik lembut agar kamera tidak kaku saat pemain diam
-    this.camYawOffset *= Math.pow(0.02, dt);
+    this.camYawOffset *= Math.pow(0.35, dt);
     const cp = Math.cos(this.camPitch), sp = Math.sin(this.camPitch);
     const ax = Math.sin(yawCam) * cp;
     const ay = sp;

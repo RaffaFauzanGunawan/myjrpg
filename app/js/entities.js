@@ -236,12 +236,16 @@ export class Player extends Entity {
     this.grounded = true;
   }
 
-  update(dt, keys) {
+  update(dt, keys, camYaw = 0) {
+    // gerak relatif-kamera: W = menjauh dari kamera, D = kanan kamera
+    // (camYaw = yaw efektif kamera yang dihitung engine.follow)
+    const f = new T.Vector3(-Math.sin(camYaw), 0, -Math.cos(camYaw));
+    const r = new T.Vector3(Math.cos(camYaw), 0, -Math.sin(camYaw));
     const dir = new T.Vector3();
-    if (keys.has('KeyW') || keys.has('ArrowUp')) dir.z -= 1;
-    if (keys.has('KeyS') || keys.has('ArrowDown')) dir.z += 1;
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) dir.x -= 1;
-    if (keys.has('KeyD') || keys.has('ArrowRight')) dir.x += 1;
+    if (keys.has('KeyW') || keys.has('ArrowUp')) dir.add(f);
+    if (keys.has('KeyS') || keys.has('ArrowDown')) dir.sub(f);
+    if (keys.has('KeyD') || keys.has('ArrowRight')) dir.add(r);
+    if (keys.has('KeyA') || keys.has('ArrowLeft')) dir.sub(r);
     if (dir.lengthSq() > 0) dir.normalize();
 
     const wasGrounded = this.grounded;
