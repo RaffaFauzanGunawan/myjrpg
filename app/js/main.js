@@ -426,6 +426,7 @@ function showEnding() {
 // LOOP UTAMA
 // ============================================================
 function update(dt) {
+  if (!gameStarted || document.getElementById('pause-screen')) return;
   const now = performance.now() / 1000;
 
   // waktu
@@ -569,6 +570,14 @@ function boot() {
       startGame(true);
     }
   };
+  $('btn-how').onclick = () => ui.showModal('❓ Cara Main', `<p><b>Gerak:</b> drag kiri / sentuh = joystick analog (pelan & cepat sesuai jarak), WASD / panah juga bisa.</p>
+    <p><b>Kamera:</b> klik-kanan + drag = putar, scroll = zoom.</p>
+    <p><b>Interaksi:</b> E untuk bicara, buka peti, belanja, atau lawan boss.</p>
+    <p><b>Battle:</b> pilih aksi → target → timing ring (PERFECT/GOOD/MISS).</p>
+    <p><b>Simpan:</b> F5 atau waystone di alun-alun kota. Continue di menu utama.</p>`);
+  $('btn-about').onclick = () => ui.showModal('📖 Tentang Game', `<p><b>Chronicles of the Fallen Crown</b> — JRPG dunia terbuka voxel 3D.</p>
+    <p>Raja Aldric dibunuh, mahkota jatuh, dan kerajaan Valdria tercabik. Berpetualanglah sebagai Sir Cedric bersama Lyra dan Aldous: kalahkan Shadow Knight, Naga Kristal, hingga sang tiran Marius.</p>
+    <p>6 bioma: Kota Valdria, Hutan Verdant, Pegunungan Kristal, Ashlands, Danau Mistral, dan Pantai Emas.</p>`);
 
   // input global: E, F5, Esc
   window.addEventListener('keydown', (e) => {
@@ -580,7 +589,7 @@ function boot() {
       if (!ui.dialog.active && !battle.active && !$('shop-panel').classList.contains('hidden')) {
         $('shop-panel').classList.add('hidden');
       } else if (gameStarted && !battle.active && !ui.dialog.active && !document.getElementById('pause-screen')) {
-        ui.showPause();
+        ui.showPause(() => { saveGame(game); location.reload(); });
       }
     }
   });

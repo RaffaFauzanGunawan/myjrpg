@@ -115,7 +115,7 @@ export class World {
         // ---------- pohon & tumbuhan per bioma ----------
         const p = rng(x * 0.5, z * 0.5);
         const free = this._clearOfProtected(x, z, 3);
-        if (bio === BIOME.FOREST && p > 0.68 && free) {
+        if (bio === BIOME.FOREST && p > 0.76 && free) {
           this._addTree(x, z, top, 3 + Math.floor(p * 5), 9, 5); // pohon daun rimbun
         } else if (bio === BIOME.SNOW && p > 0.78 && free) {
           this._addPine(x, z, top);
@@ -231,6 +231,24 @@ export class World {
     const h = this.height[this.idx(x, z)];
     for (let y = h + 1; y <= CFG.MAX_HEIGHT; y++) this.block[this.bIdx(x, y, z)] = 0;
     this.block[this.bIdx(x, h, z)] = 14;
+    // tebangi pohon di sekitar jalan supaya koridor terlihat jelas
+    this._clearVeg(x, z);
+  }
+
+  // hapus pohon/semak (blok vegetasi) di tile dan 4 tetangganya, di atas tanah
+  _clearVeg(x, z) {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const nx = x + dx, nz = z + dz;
+        if (nx < 0 || nz < 0 || nx >= S || nz >= S) continue;
+        const h = this.height[this.idx(nx, nz)];
+        for (let y = h + 1; y <= CFG.MAX_HEIGHT; y++) {
+          const i = this.bIdx(nx, y, nz);
+          const t = this.block[i];
+          if (t === 5 || t === 9 || t === 15 || t === 16) this.block[i] = 0;
+        }
+      }
+    }
   }
 
   // jalan utama kota + menuju pantai

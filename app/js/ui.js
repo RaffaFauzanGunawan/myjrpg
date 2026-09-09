@@ -29,6 +29,16 @@ export class UI {
   showTitle(hasSave) { $('title-screen').classList.remove('hidden'); $('btn-continue').classList.toggle('hidden', !hasSave); }
   hideTitle() { $('title-screen').classList.add('hidden'); }
   showHUD() { this.hud.classList.remove('hidden'); }
+  hideHUD() { this.hud.classList.add('hidden'); }
+
+  // ---------- modal info (menu utama) ----------
+  showModal(title, body) {
+    $('modal-title').textContent = title;
+    $('modal-body').innerHTML = body;
+    $('menu-modal').classList.remove('hidden');
+    $('modal-close').onclick = () => $('menu-modal').classList.add('hidden');
+  }
+  hideModal() { $('menu-modal').classList.add('hidden'); }
 
   toast(info) {
     this.toastEl.innerHTML = `<h2>${info.name}</h2><p>${info.sub || ''}</p>`;
@@ -205,7 +215,7 @@ export class UI {
     this.questEl.innerHTML = html;
   }
 
-  showPause() {
+  showPause(onMenu) {
     const el = document.createElement('div');
     el.id = 'pause-screen';
     el.innerHTML = `<div class="box">
@@ -216,8 +226,14 @@ export class UI {
       <p>F5 — simpan game</p>
       <p>Esc — tutup jeda</p>
       <p class="title-hint">Klik di luar panel untuk lanjut</p>
+      <div class="menu-row">
+        <button id="pause-resume" class="pixel-btn">▶&nbsp; Lanjut</button>
+        <button id="pause-menu" class="pixel-btn">🏠&nbsp; Menu Utama</button>
+      </div>
     </div>`;
-    el.addEventListener('click', () => el.remove());
+    el.addEventListener('click', (e) => { if (e.target === el) el.remove(); });
     document.body.appendChild(el);
+    $('pause-resume').onclick = () => el.remove();
+    $('pause-menu').onclick = () => { el.remove(); if (onMenu) onMenu(); };
   }
 }

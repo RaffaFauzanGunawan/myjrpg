@@ -58,7 +58,7 @@ export class Engine {
 
     // ---- kamera orbit ----
     this.camYawOffset = 0;     // geser kamera oleh drag mouse (kembali pelan ke 0)
-    this.camPitch = 1.02;      // tilt (rad), besar = lebih top-down
+    this.camPitch = 0.82;      // tilt (rad) — sekitar 47°, sudut third-person yang nyaman
     this.camDist = CFG.CAMERA_DIST;
     this._bindInput();
 

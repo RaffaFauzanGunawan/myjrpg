@@ -15,7 +15,7 @@ export const CFG = {
   JUMP_SPEED: 10,
   GRAVITY: 28,
   EYE_HEIGHT: 1.45,
-  CAMERA_DIST: 7.5,
+  CAMERA_DIST: 9,
   CAMERA_HEIGHT: 6.2,
 
   // ---- encounter ----
@@ -69,7 +69,7 @@ export const TILE_PALETTES = {
   crystal:    ['#7ee8fa', '#5fd8f0', '#9af0ff'],
   roof:       ['#7d3a4a', '#703548', '#8a4352'],
   wall:       ['#c9b89a', '#bca98c', '#d3c3a8'],
-  path:       ['#9a8a6a', '#8f8062', '#a49372'],
+  path:       ['#c9b896', '#bda982', '#d4c4a4'],
   lava:       ['#e25822', '#d14a1c', '#f06a2e'],
   flower1:    ['#e74c8b', '#f062a0'],
   flower2:    ['#f1c40f', '#ffd54f'],

@@ -58,6 +58,17 @@ body { font-family: "Courier New", monospace; color: var(--text); }
 .pixel-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #000; }
 .pixel-btn.big { font-size: 17px; padding: 13px 34px; margin: 6px; }
 .pixel-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.menu-row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; }
+
+/* ---------- modal info ---------- */
+.modal-box {
+  max-width: 460px; width: 90%; background: var(--panel);
+  border: 3px solid var(--panel-line); box-shadow: 0 0 0 3px #000, 0 0 40px rgba(0,0,0,0.8);
+  padding: 26px 30px; text-align: left;
+}
+.modal-box h2 { color: var(--gold); letter-spacing: 2px; margin-bottom: 14px; text-align: center; }
+.modal-box p { font-size: 13px; line-height: 1.7; color: #c9c6ba; margin-bottom: 8px; }
+.modal-box .pixel-btn { margin-top: 14px; display: block; margin-left: auto; margin-right: auto; }
 
 /* ---------- HUD ---------- */
 #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
