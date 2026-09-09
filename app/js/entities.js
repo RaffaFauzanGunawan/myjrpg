@@ -234,45 +234,44 @@ export class Player extends Entity {
     this.animT = 0;
     this.moveAmt = 0;
     this.grounded = true;
+    this.vx = 0; this.vz = 0;
   }
 
-  update(dt, keys, camYaw = 0) {
-    // gerak relatif-kamera: W = menjauh dari kamera, D = kanan kamera
-    // (camYaw = yaw efektif kamera yang dihitung engine.follow)
-    const f = new T.Vector3(-Math.sin(camYaw), 0, -Math.cos(camYaw));
-    const r = new T.Vector3(Math.cos(camYaw), 0, -Math.sin(camYaw));
-    const dir = new T.Vector3();
-    if (keys.has('KeyW') || keys.has('ArrowUp')) dir.add(f);
-    if (keys.has('KeyS') || keys.has('ArrowDown')) dir.sub(f);
-    if (keys.has('KeyD') || keys.has('ArrowRight')) dir.add(r);
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) dir.sub(r);
-    if (dir.lengthSq() > 0) dir.normalize();
+  // move = { x, z, jump } — arah dunia relatif kamera, panjang = magnitude 0..1
+  update(dt, move) {
+    const mag = Math.min(1, Math.hypot(move.x, move.z));
+    // percepatan/deselerasi halus (rasa analog, tidak nyentak)
+    const speedScale = 0.3 + 0.7 * mag; // tepi joystick = pelan, penuh = cepat
+    const k = 1 - Math.pow(0.0001, dt);
+    this.vx += (move.x * this.speed * speedScale - this.vx) * k;
+    this.vz += (move.z * this.speed * speedScale - this.vz) * k;
 
     const wasGrounded = this.grounded;
     // gerak horizontal dengan cek tabrakan blok
-    const nx = this.pos.x + dir.x * this.speed * dt;
-    const nz = this.pos.z + dir.z * this.speed * dt;
-    const gy = this.pos.y;
-
+    const nx = this.pos.x + this.vx * dt;
+    const nz = this.pos.z + this.vz * dt;
     if (this._canStand(nx, this.pos.z)) this.pos.x = nx;
     if (this._canStand(this.pos.x, nz)) this.pos.z = nz;
 
-    // lompat
-    if ((keys.has('Space')) && this.onGround) {
+    // lompat (WASD fallback tetap bisa, joystick tidak melompat)
+    if (move.jump && this.onGround) {
       this.vel.y = CFG.JUMP_SPEED;
       this.onGround = false;
     }
     this.updatePhysics(dt);
 
-    // menghadap arah gerak
-    if (dir.lengthSq() > 0) {
-      this.facing = dir.x >= 0 ? 1 : -1;
-      this.moveAmt += this.speed * dt;
+    const moving = mag > 0.02 || Math.abs(this.vx) + Math.abs(this.vz) > 0.3;
+    // rotasi model: berputar halus ke arah gerak (tanpa spin/glitch)
+    if (mag > 0.02) {
+      const targetYaw = Math.atan2(move.x, move.z);
+      let d = targetYaw - this.model.rotation.y;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      this.model.rotation.y += d * (1 - Math.pow(0.0005, dt));
     }
     // animasi jalan
-    this.animT += dt * (dir.lengthSq() > 0 ? 10 : 0);
+    this.animT += dt * (moving ? 10 : 0);
     const p = this.model.userData.parts;
-    const swing = Math.sin(this.animT) * (dir.lengthSq() > 0 ? 0.5 : 0);
+    const swing = Math.sin(this.animT) * (moving ? 0.5 : 0);
     if (p) {
       p.legL.rotation.x = swing;
       p.legR.rotation.x = -swing;
@@ -280,12 +279,6 @@ export class Player extends Entity {
       p.armR.rotation.x = swing * 0.7;
     }
     this.model.position.set(this.pos.x, this.pos.y, this.pos.z);
-    // rotasi model mengikuti arah (hanya yaw)
-    this.model.rotation.y = Math.atan2(dir.x, dir.z);
-    if (dir.lengthSq() === 0 && p) {
-      p.legL.rotation.x *= 0.85;
-      p.legR.rotation.x *= 0.85;
-    }
     this.grounded = this.onGround;
     if (this.onGround && !wasGrounded) this._landDust();
   }

@@ -53,6 +53,8 @@ export class Engine {
     // ---- input ----
     this.keys = new Set();
     this.mouse = { x: 0, y: 0, down: false, lastX: 0, lastY: 0 };
+    this.analog = { x: 0, y: 0 };      // joystick virtual: -1..1 (y negatif = maju)
+    this._joy = { active: false, id: null, ox: 0, oy: 0 };
 
     // ---- kamera orbit ----
     this.camYawOffset = 0;     // geser kamera oleh drag mouse (kembali pelan ke 0)
@@ -199,6 +201,7 @@ export class Engine {
 
   // ---------- input ----------
   _bindInput() {
+    const JOY_R = 64; // radius joystick virtual (px)
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
       this.keys.add(e.code);
@@ -206,23 +209,49 @@ export class Engine {
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    this.container.addEventListener('mousedown', (e) => {
-      if (e.button === 0) {
+
+    // pointer: tombol kiri/touch = joystick analog, tombol kanan = orbit kamera
+    this.container.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) {
         this.mouse.down = true;
-        this.mouse.x = e.clientX; this.mouse.y = e.clientY;
         this.mouse.lastX = e.clientX; this.mouse.lastY = e.clientY;
+        return;
+      }
+      if (e.pointerType === 'touch' || e.button === 0) {
+        this._joy.active = true;
+        this._joy.id = e.pointerId;
+        this._joy.ox = e.clientX; this._joy.oy = e.clientY;
+        this.analog.x = 0; this.analog.y = 0;
+        e.preventDefault();
       }
     });
-    window.addEventListener('mousemove', (e) => {
-      if (this.mouse.down) {
+    window.addEventListener('pointermove', (e) => {
+      if (this._joy.active && e.pointerId === this._joy.id) {
+        const dx = e.clientX - this._joy.ox;
+        const dy = e.clientY - this._joy.oy;
+        const len = Math.hypot(dx, dy) || 1;
+        const mag = Math.min(1, len / JOY_R);
+        this.analog.x = (dx / len) * mag;
+        this.analog.y = (dy / len) * mag;
+        e.preventDefault();
+      } else if (this.mouse.down) {
         this.orbit(e.clientX - this.mouse.lastX, e.clientY - this.mouse.lastY);
         this.mouse.lastX = e.clientX; this.mouse.lastY = e.clientY;
       }
       this.mouse.x = e.clientX; this.mouse.y = e.clientY;
     });
-    window.addEventListener('mouseup', () => { this.mouse.down = false; });
+    const joyEnd = (e) => {
+      if (this._joy.active && e.pointerId === this._joy.id) {
+        this._joy.active = false; this._joy.id = null;
+        this.analog.x = 0; this.analog.y = 0;
+      }
+      this.mouse.down = false;
+    };
+    window.addEventListener('pointerup', joyEnd);
+    window.addEventListener('pointercancel', joyEnd);
+    this.container.addEventListener('contextmenu', (e) => e.preventDefault());
     window.addEventListener('wheel', (e) => { e.preventDefault(); this.zoom(e.deltaY > 0 ? 1.2 : -1.2); }, { passive: false });
-    window.addEventListener('blur', () => this.keys.clear());
+    window.addEventListener('blur', () => { this.keys.clear(); this.analog.x = 0; this.analog.y = 0; });
   }
 
   resize() {

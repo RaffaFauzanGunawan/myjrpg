@@ -432,9 +432,22 @@ function update(dt) {
   game.hour += dt * 24 / CFG.DAY_LENGTH;
   if (game.hour >= 24) { game.hour -= 24; game.day++; }
 
-  // input player (relatif kamera agar kontrol terasa natural)
-  const camYaw = player.model.rotation.y + Math.PI + engine.camYawOffset;
-  player.update(dt, engine.keys, camYaw);
+  // input player: arah relatif kamera AKTUAL (posisi kamera, bukan yaw yang
+  // bisa memicu loop umpan-balik/glitch). W maju, joystick analog.
+  const camPos = engine.camera.position;
+  const fwd = new THREE.Vector3(player.pos.x - camPos.x, 0, player.pos.z - camPos.z);
+  if (fwd.lengthSq() < 0.0001) fwd.set(0, 0, -1); else fwd.normalize();
+  const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0));
+  const move = new THREE.Vector3();
+  if (engine.keys.has('KeyW') || engine.keys.has('ArrowUp')) move.add(fwd);
+  if (engine.keys.has('KeyS') || engine.keys.has('ArrowDown')) move.sub(fwd);
+  if (engine.keys.has('KeyD') || engine.keys.has('ArrowRight')) move.add(right);
+  if (engine.keys.has('KeyA') || engine.keys.has('ArrowLeft')) move.sub(right);
+  move.addScaledVector(right, engine.analog.x);   // joystick: kanan
+  move.addScaledVector(fwd, -engine.analog.y);    // joystick: bawah = mundur
+  move.jump = engine.keys.has('Space');
+  if (move.x * move.x + move.z * move.z > 1) move.normalize();
+  player.update(dt, move);
 
   // entitas lain
   for (const n of npcs) n.update(dt);
@@ -470,8 +483,7 @@ function update(dt) {
   }
 
   // encounter acak (hanya di area liar, saat berjalan, setelah masa aman)
-  const moving = engine.keys.has('KeyW') || engine.keys.has('KeyS') || engine.keys.has('KeyA') || engine.keys.has('KeyD')
-    || engine.keys.has('ArrowUp') || engine.keys.has('ArrowDown') || engine.keys.has('ArrowLeft') || engine.keys.has('ArrowRight');
+  const moving = move.x * move.x + move.z * move.z > 0.01;
   if (moving && bio !== BIOME.CITY && bio !== BIOME.LAKE && now > safeUntil && !battle.active) {
     walkTime += dt;
     if (walkTime > 1.5 && Math.random() < CFG.ENCOUNTER_RATE * dt) {

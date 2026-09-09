@@ -17,7 +17,7 @@
 html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0d16; }
 body { font-family: "Courier New", monospace; color: var(--text); }
 
-#viewport { position: fixed; inset: 0; }
+#viewport { position: fixed; inset: 0; touch-action: none; }
 #viewport canvas { display: block; }
 
 .hidden { display: none !important; }
