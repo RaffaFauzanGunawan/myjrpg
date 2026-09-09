@@ -10,6 +10,10 @@ namespace Chronicles3D.Battle
     /// Builds a battle arena, spawns hero + enemy figures, and drives the
     /// turn timeline. UI decisions are forwarded through a delegate so the
     /// Unity UI layer stays separate.
+    ///
+    /// Damage is elemental: each skill and enemy has an ElementType and the
+    /// ElementSystem weakness chart decides super-effective / resisted hits.
+    /// Skills are gated by the skill tree (unlocked node ids) and cost MP.
     /// </summary>
     public class BattleManager3D : MonoBehaviour
     {
@@ -31,12 +35,16 @@ namespace Chronicles3D.Battle
         readonly List<TurnSlot> timeline = new List<TurnSlot>();
         int turnPos;
 
-        // Callbacks wired to UI
+        // Heroes with the guard flag raised (next hit they take is halved)
+        readonly Dictionary<int, bool> guardUp = new Dictionary<int, bool>();
+
+        // Callbacks wired to UI / GameManager
         public System.Action<string> OnLog;
         public System.Action<int> OnActorActivated;      // index into current actor list (hero idx or enemy idx)
         public System.Action<Phase> OnPhaseChanged;
         public System.Action<int, int> OnVictory;        // exp, gold
         public System.Action OnDefeat;
+        public System.Action<string> OnEnemyDefeated;    // enemy id (quest hook)
 
         public int CurrentHeroIndex { get; private set; }
         public int CurrentEnemyIndex { get; private set; }
@@ -63,6 +71,7 @@ namespace Chronicles3D.Battle
 
             foreach (var h in Heroes) h.Restore();
 
+            guardUp.Clear();
             BuildArena();
             BuildFigures();
             BuildTimeline();
@@ -146,6 +155,7 @@ namespace Chronicles3D.Battle
                 if (!slot.isEnemy)
                 {
                     if (Heroes[slot.index].stats.currentHP <= 0) { turnPos++; continue; }
+                    guardUp.Remove(slot.index);   // guard expires when you take your next action
                     CurrentHeroIndex = slot.index;
                     CurrentPhase = Phase.PlayerTurn;
                     IsWaitingForPlayer = true;
@@ -172,6 +182,46 @@ namespace Chronicles3D.Battle
             }
         }
 
+        // ---------- Info helpers for the UI ----------
+        public string ActiveHeroName()
+        {
+            if (CurrentHeroIndex < 0 || CurrentHeroIndex >= Heroes.Count) return "?";
+            return Heroes[CurrentHeroIndex].definition.displayName;
+        }
+
+        /// <summary>Skill ids the active hero currently has unlocked (definition order).</summary>
+        public List<string> UsableSkillIdsForCurrentHero()
+        {
+            var hero = CurrentHeroIndex >= 0 && CurrentHeroIndex < Heroes.Count ? Heroes[CurrentHeroIndex] : null;
+            var list = new List<string>();
+            if (hero == null) return list;
+            foreach (var sid in hero.definition.skillIds)
+                if (hero.HasSkill(sid)) list.Add(sid);
+            return list;
+        }
+
+        /// <summary>True when the given (definition-order) skill needs an enemy target chosen.</summary>
+        public bool SkillNeedsTarget(int definitionSkillIndex)
+        {
+            var hero = CurrentHeroIndex >= 0 && CurrentHeroIndex < Heroes.Count ? Heroes[CurrentHeroIndex] : null;
+            if (hero == null || definitionSkillIndex < 0 || definitionSkillIndex >= hero.definition.skillIds.Count) return false;
+            var skill = SkillLibrary.Get(hero.definition.skillIds[definitionSkillIndex]);
+            return skill != null && skill.kind == SkillKind.Damage && !skill.area;
+        }
+
+        public string SkillLabel(int definitionSkillIndex)
+        {
+            var hero = CurrentHeroIndex >= 0 && CurrentHeroIndex < Heroes.Count ? Heroes[CurrentHeroIndex] : null;
+            if (hero == null || definitionSkillIndex < 0 || definitionSkillIndex >= hero.definition.skillIds.Count) return "Skill";
+            string sid = hero.definition.skillIds[definitionSkillIndex];
+            var skill = SkillLibrary.Get(sid);
+            if (skill == null) return sid;
+            string elem = ElementSystem.Tag(skill.element);
+            string note = skill.kind == SkillKind.Heal || skill.kind == SkillKind.HealAll || skill.kind == SkillKind.Guard
+                ? "" : (skill.area ? " (all)" : "");
+            return sid + " " + elem + note + "  " + skill.mpCost + "MP";
+        }
+
         // ---------- Player Actions ----------
         public void PerformHeroAction(string action, int targetIndex)
         {
@@ -179,38 +229,156 @@ namespace Chronicles3D.Battle
             IsWaitingForPlayer = false;
 
             var hero = Heroes[CurrentHeroIndex];
-            if (action == "attack")
+            if (action == "defend")
             {
-                int dmg = ComputeDamage(hero.stats.atk, Enemies[targetIndex].def);
-                DealEnemyDamage(targetIndex, dmg);
-                OnLog?.Invoke($"{hero.definition.displayName} attacks {Enemies[targetIndex].displayName} for {dmg}!");
+                guardUp[CurrentHeroIndex] = true;
+                OnLog?.Invoke($"{hero.definition.displayName} raises their guard! (next hit halved)");
             }
-            else if (action == "defend")
+            else if (action == "attack")
             {
-                OnLog?.Invoke($"{hero.definition.displayName} defends.");
+                int t = ResolveEnemyTarget(targetIndex);
+                if (t < 0)
+                {
+                    OnLog?.Invoke("No target left!");
+                    IsWaitingForPlayer = true; // let the player pick again
+                    return;
+                }
+                int dmg = ComputeDamage(hero.stats.atk, Enemies[t].def);
+                DealEnemyDamage(t, dmg);
+                OnLog?.Invoke($"{hero.definition.displayName} attacks {Enemies[t].displayName} for {dmg}!");
             }
         }
 
-        public void PerformHeroSkill(int skillIndex, int targetIndex)
+        /// <summary>
+        /// Execute skill at <paramref name="definitionSkillIndex"/> (index into the
+        /// active hero's definition.skillIds). Pass targetIndex = -1 for skills that
+        /// need no enemy target (heals, guards, area damage).
+        /// </summary>
+        public void PerformHeroSkill(int definitionSkillIndex, int targetIndex)
         {
             if (!IsWaitingForPlayer) return;
-            IsWaitingForPlayer = false;
-
             var hero = Heroes[CurrentHeroIndex];
-            string skill = hero.definition.skillIds.Count > skillIndex ? hero.definition.skillIds[skillIndex] : "Skill";
+            if (definitionSkillIndex < 0 || definitionSkillIndex >= hero.definition.skillIds.Count) return;
 
-            // Basic: skill deals magic damage to one enemy (heal self if skill is Heal)
-            if (skill == "Heal")
+            string sid = hero.definition.skillIds[definitionSkillIndex];
+            if (!hero.HasSkill(sid))
             {
-                hero.stats.currentHP = Mathf.Min(hero.stats.maxHP, hero.stats.currentHP + 60);
-                OnLog?.Invoke($"{hero.definition.displayName} casts Heal! +60 HP");
+                OnLog?.Invoke($"{sid} is not learned yet! (use the Skill Tree)");
+                return;
+            }
+            var skill = SkillLibrary.Get(sid) ?? new SkillDefinition3D { name = sid, power = 100 };
+            if (hero.stats.currentMP < skill.mpCost)
+            {
+                OnLog?.Invoke($"{hero.definition.displayName} lacks {skill.mpCost} MP for {sid}!");
+                return;
+            }
+
+            IsWaitingForPlayer = false;
+            hero.stats.currentMP -= skill.mpCost;
+            OnLog?.Invoke($"{hero.definition.displayName} uses {sid}!");
+
+            switch (skill.kind)
+            {
+                case SkillKind.Damage:
+                    ResolveDamageSkill(hero, skill, targetIndex);
+                    break;
+                case SkillKind.Heal:
+                case SkillKind.HealAll:
+                    ResolveHealSkill(hero, skill);
+                    break;
+                case SkillKind.Guard:
+                    guardUp[CurrentHeroIndex] = true;
+                    OnLog?.Invoke($"{hero.definition.displayName} braces! (next hit halved)");
+                    break;
+            }
+        }
+
+        void ResolveDamageSkill(CharacterInstance3D hero, SkillDefinition3D skill, int targetIndex)
+        {
+            if (skill.area)
+            {
+                for (int i = 0; i < Enemies.Count; i++)
+                {
+                    if (EnemyHP[i] <= 0) continue;
+                    int dmg = ComputeSkillDamage(hero, skill, Enemies[i]);
+                    DealEnemyDamage(i, dmg);
+                    LogElementalHit(hero, Enemies[i], skill, dmg);
+                }
+                return;
+            }
+
+            int t = ResolveEnemyTarget(targetIndex);
+            if (t < 0)
+            {
+                OnLog?.Invoke("No target left!");
+                IsWaitingForPlayer = true;
+                return;
+            }
+            int single = ComputeSkillDamage(hero, skill, Enemies[t]);
+            DealEnemyDamage(t, single);
+            LogElementalHit(hero, Enemies[t], skill, single);
+        }
+
+        void ResolveHealSkill(CharacterInstance3D hero, SkillDefinition3D skill)
+        {
+            if (skill.kind == SkillKind.HealAll)
+            {
+                int healed = 0;
+                foreach (var h in Heroes)
+                {
+                    int before = h.stats.currentHP;
+                    int amount = skill.power + hero.stats.mag / 2;
+                    h.stats.currentHP = Mathf.Min(h.stats.maxHP, h.stats.currentHP + amount);
+                    healed += h.stats.currentHP - before;
+                }
+                OnLog?.Invoke($"Party restored for {healed} HP total!");
             }
             else
             {
-                int dmg = ComputeDamage(hero.stats.mag, Enemies[targetIndex].res) + 10;
-                DealEnemyDamage(targetIndex, dmg);
-                OnLog?.Invoke($"{hero.definition.displayName} uses {skill} for {dmg}!");
+                // Heal the most wounded living ally
+                CharacterInstance3D best = null;
+                int bestHp = int.MaxValue;
+                foreach (var h in Heroes)
+                {
+                    if (h.stats.currentHP <= 0) continue;
+                    if (h.stats.currentHP < bestHp) { bestHp = h.stats.currentHP; best = h; }
+                }
+                if (best == null) return;
+                int amount = skill.power + hero.stats.mag / 2;
+                best.stats.currentHP = Mathf.Min(best.stats.maxHP, best.stats.currentHP + amount);
+                OnLog?.Invoke($"{best.definition.displayName} recovers {amount} HP!");
             }
+        }
+
+        int ComputeSkillDamage(CharacterInstance3D hero, SkillDefinition3D skill, EnemyDefinition3D enemy)
+        {
+            bool magical = skill.scaling == SkillScaling.Magical;
+            int baseStat = magical ? hero.stats.mag : hero.stats.atk;
+            int guardStat = magical ? enemy.res : enemy.def;
+            float variance = Random.Range(0.85f, 1.2f);
+            float raw = (baseStat * 1.2f - guardStat * 0.6f) * variance * (skill.power / 100f);
+            int dmg = Mathf.Max(1, Mathf.RoundToInt(raw));
+            float mult = ElementSystem.GetMultiplier(skill.element, enemy.element);
+            return Mathf.Max(1, Mathf.RoundToInt(dmg * mult));
+        }
+
+        void LogElementalHit(CharacterInstance3D hero, EnemyDefinition3D enemy, SkillDefinition3D skill, int dmg)
+        {
+            float mult = ElementSystem.GetMultiplier(skill.element, enemy.element);
+            string flavor = "";
+            if (mult > 1f && skill.element != ElementType.None)
+                flavor = " It's super effective! (" + ElementSystem.DisplayName(enemy.element) + " is weak to " + ElementSystem.DisplayName(skill.element) + ")";
+            else if (mult < 1f && skill.element != ElementType.None)
+                flavor = " The attack was resisted...";
+            OnLog?.Invoke($"{hero.definition.displayName} hits {enemy.displayName} for {dmg}!{flavor}");
+        }
+
+        int ResolveEnemyTarget(int targetIndex)
+        {
+            if (targetIndex >= 0 && targetIndex < EnemyHP.Count && EnemyHP[targetIndex] > 0) return targetIndex;
+            for (int i = 0; i < EnemyHP.Count; i++)
+                if (EnemyHP[i] > 0) return i;
+            return -1;
         }
 
         int ComputeDamage(int atk, int def)
@@ -224,6 +392,7 @@ namespace Chronicles3D.Battle
             if (EnemyHP[enemyIndex] <= 0)
             {
                 OnLog?.Invoke($"{Enemies[enemyIndex].displayName} is defeated!");
+                OnEnemyDefeated?.Invoke(Enemies[enemyIndex].id);
                 // Simple death animation
                 if (enemyFigures[enemyIndex])
                 {
@@ -244,8 +413,18 @@ namespace Chronicles3D.Battle
 
             int target = heroCandidates[Random.Range(0, heroCandidates.Count)];
             int dmg = ComputeDamage(Enemies[enemyIndex].atk, Heroes[target].stats.def);
+
+            if (guardUp.ContainsKey(target))
+            {
+                guardUp.Remove(target);
+                dmg = Mathf.Max(1, dmg / 2);
+                OnLog?.Invoke($"{Enemies[enemyIndex].displayName} hits {Heroes[target].definition.displayName} for {dmg} (guarded)!  ");
+            }
+            else
+            {
+                OnLog?.Invoke($"{Enemies[enemyIndex].displayName} hits {Heroes[target].definition.displayName} for {dmg}!");
+            }
             Heroes[target].stats.currentHP = Mathf.Max(0, Heroes[target].stats.currentHP - dmg);
-            OnLog?.Invoke($"{Enemies[enemyIndex].displayName} hits {Heroes[target].definition.displayName} for {dmg}!");
             yield return new WaitForSeconds(0.6f);
         }
 
@@ -282,6 +461,7 @@ namespace Chronicles3D.Battle
                 driveRoutine = null;
             }
             IsWaitingForPlayer = false;
+            guardUp.Clear();
             if (arenaRoot) Destroy(arenaRoot);
             arenaRoot = null;
             heroFigures.Clear();

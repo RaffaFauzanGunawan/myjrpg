@@ -42,6 +42,8 @@ namespace Chronicles3D.Data
 
     /// <summary>
     /// Runtime character instance used by both exploration and battle.
+    /// Holds levelling data plus skill-tree progress (skill points and the
+    /// set of unlocked node ids) so a full save/restore round-trip works.
     /// </summary>
     public class CharacterInstance3D
     {
@@ -50,6 +52,10 @@ namespace Chronicles3D.Data
         public int level = 1;
         public int exp;
         public int expToNext = 100;
+
+        [Header("Skill tree progress")]
+        public int sp;                                        // unspent skill points
+        public readonly List<string> unlockedNodes = new List<string>(); // node ids (persisted)
 
         public CharacterInstance3D(CharacterDefinition def)
         {
@@ -62,6 +68,9 @@ namespace Chronicles3D.Data
                 mag = def.baseMag, res = def.baseRes,
                 spd = def.baseSpd, luk = 10
             };
+            // The first signature skill is known from the start
+            if (def.skillIds.Count > 0)
+                unlockedNodes.Add(SkillTreeLibrary.SkillNodeId(def.skillIds[0]));
         }
 
         public void Restore()
@@ -70,11 +79,45 @@ namespace Chronicles3D.Data
             stats.currentMP = stats.maxMP;
         }
 
+        public bool HasNode(string id) { return unlockedNodes.Contains(id); }
+
+        public bool HasSkill(string skillId) { return HasNode(SkillTreeLibrary.SkillNodeId(skillId)); }
+
+        /// <summary>
+        /// Try to spend SP on a skill-tree node. Validates cost and the
+        /// prerequisite chain, applies passive bonuses, returns an error
+        /// string on failure (null on success).
+        /// </summary>
+        public string TryUnlockNode(SkillTreeNode3D node)
+        {
+            if (HasNode(node.id)) return "Already learned.";
+            if (node.prerequisiteId != null && !HasNode(node.prerequisiteId))
+                return "Unlock the previous tier first.";
+            if (sp < node.spCost) return "Not enough SP (need " + node.spCost + ").";
+
+            sp -= node.spCost;
+            unlockedNodes.Add(node.id);
+
+            if (!node.isSkill) // passive stat node
+            {
+                stats.maxHP += node.bonusHP;
+                stats.currentHP += node.bonusHP;
+                stats.maxMP += node.bonusMP;
+                stats.currentMP += node.bonusMP;
+                stats.atk += node.bonusAtk;
+                stats.def += node.bonusDef;
+                stats.mag += node.bonusMag;
+                stats.res += node.bonusRes;
+            }
+            return null;
+        }
+
         public void LevelUp()
         {
             level++;
             exp -= expToNext;
             expToNext = Mathf.RoundToInt(expToNext * 1.25f);
+            sp += 1; // +1 skill point per level
             // Simple growth
             stats.maxHP += 10;
             stats.maxMP += 3;
@@ -163,6 +206,7 @@ namespace Chronicles3D.Data
         public float height = 1.4f;
         public int hp = 60, atk = 12, def = 6, mag = 6, res = 5, spd = 8, exp = 15, gold = 10;
         public bool isBoss;
+        public ElementType element = ElementType.None;   // drives elemental weakness/resistance
         public EnemyShape shape = EnemyShape.Humanoid;
     }
 
@@ -178,17 +222,17 @@ namespace Chronicles3D.Data
             if (_initialized) return;
             _initialized = true;
 
-            Defs["forest_bug"] = new EnemyDefinition3D { id = "forest_bug", displayName = "Carapace Crawler", bodyColor = new Color(0.85f, 0.5f, 0.17f), accentColor = new Color(0.55f, 0.3f, 0.08f), height = 1.1f, hp = 45, atk = 9, def = 5, spd = 7, shape = EnemyShape.Bug };
+            Defs["forest_bug"] = new EnemyDefinition3D { id = "forest_bug", displayName = "Carapace Crawler", bodyColor = new Color(0.85f, 0.5f, 0.17f), accentColor = new Color(0.55f, 0.3f, 0.08f), height = 1.1f, hp = 45, atk = 9, def = 5, spd = 7, element = ElementType.Earth, shape = EnemyShape.Bug };
             Defs["wolf"] = new EnemyDefinition3D { id = "wolf", displayName = "Dire Wolf", bodyColor = new Color(0.45f, 0.48f, 0.52f), accentColor = new Color(0.3f, 0.32f, 0.35f), height = 1.2f, hp = 55, atk = 14, def = 5, spd = 14, shape = EnemyShape.Wolf };
             Defs["goblin"] = new EnemyDefinition3D { id = "goblin", displayName = "Goblin Scout", bodyColor = new Color(0.35f, 0.7f, 0.3f), accentColor = new Color(0.6f, 0.35f, 0.2f), height = 1.1f, hp = 45, atk = 10, def = 6, spd = 8, shape = EnemyShape.Humanoid };
-            Defs["slime"] = new EnemyDefinition3D { id = "slime", displayName = "Forest Slime", bodyColor = new Color(0.25f, 0.75f, 0.4f), accentColor = new Color(0.5f, 0.9f, 0.6f), height = 0.9f, hp = 30, atk = 6, def = 3, spd = 4, shape = EnemyShape.Slime };
-            Defs["skeleton"] = new EnemyDefinition3D { id = "skeleton", displayName = "Skeleton Warrior", bodyColor = new Color(0.85f, 0.83f, 0.75f), accentColor = new Color(0.45f, 0.45f, 0.5f), height = 1.7f, hp = 50, atk = 12, def = 10, spd = 6, shape = EnemyShape.Humanoid };
-            Defs["fire_imp"] = new EnemyDefinition3D { id = "fire_imp", displayName = "Fire Imp", bodyColor = new Color(0.8f, 0.25f, 0.15f), accentColor = new Color(1f, 0.6f, 0.1f), height = 1.0f, hp = 40, atk = 12, def = 4, spd = 10, shape = EnemyShape.Humanoid };
-            Defs["golem"] = new EnemyDefinition3D { id = "golem", displayName = "Stone Golem", bodyColor = new Color(0.5f, 0.5f, 0.55f), accentColor = new Color(0.3f, 0.6f, 0.45f), height = 2.4f, hp = 90, atk = 15, def = 18, spd = 3, shape = EnemyShape.Golem };
-            Defs["wyvern"] = new EnemyDefinition3D { id = "wyvern", displayName = "Wyvern", bodyColor = new Color(0.2f, 0.45f, 0.7f), accentColor = new Color(0.6f, 0.8f, 1f), height = 1.9f, hp = 75, atk = 16, def = 8, spd = 12, shape = EnemyShape.Wyvern };
+            Defs["slime"] = new EnemyDefinition3D { id = "slime", displayName = "Forest Slime", bodyColor = new Color(0.25f, 0.75f, 0.4f), accentColor = new Color(0.5f, 0.9f, 0.6f), height = 0.9f, hp = 30, atk = 6, def = 3, spd = 4, element = ElementType.Water, shape = EnemyShape.Slime };
+            Defs["skeleton"] = new EnemyDefinition3D { id = "skeleton", displayName = "Skeleton Warrior", bodyColor = new Color(0.85f, 0.83f, 0.75f), accentColor = new Color(0.45f, 0.45f, 0.5f), height = 1.7f, hp = 50, atk = 12, def = 10, spd = 6, element = ElementType.Dark, shape = EnemyShape.Humanoid };
+            Defs["fire_imp"] = new EnemyDefinition3D { id = "fire_imp", displayName = "Fire Imp", bodyColor = new Color(0.8f, 0.25f, 0.15f), accentColor = new Color(1f, 0.6f, 0.1f), height = 1.0f, hp = 40, atk = 12, def = 4, spd = 10, element = ElementType.Fire, shape = EnemyShape.Humanoid };
+            Defs["golem"] = new EnemyDefinition3D { id = "golem", displayName = "Stone Golem", bodyColor = new Color(0.5f, 0.5f, 0.55f), accentColor = new Color(0.3f, 0.6f, 0.45f), height = 2.4f, hp = 90, atk = 15, def = 18, spd = 3, element = ElementType.Earth, shape = EnemyShape.Golem };
+            Defs["wyvern"] = new EnemyDefinition3D { id = "wyvern", displayName = "Wyvern", bodyColor = new Color(0.2f, 0.45f, 0.7f), accentColor = new Color(0.6f, 0.8f, 1f), height = 1.9f, hp = 75, atk = 16, def = 8, spd = 12, element = ElementType.Wind, shape = EnemyShape.Wyvern };
 
-            Defs["boss_shadow"] = new EnemyDefinition3D { id = "boss_shadow", displayName = "Shadow Knight", bodyColor = new Color(0.12f, 0.1f, 0.2f), accentColor = new Color(0.6f, 0.1f, 0.25f), height = 2.2f, hp = 260, atk = 22, def = 14, spd = 9, isBoss = true, shape = EnemyShape.Humanoid };
-            Defs["boss_dragon"] = new EnemyDefinition3D { id = "boss_dragon", displayName = "Dragon Lord Vexar", bodyColor = new Color(0.55f, 0.1f, 0.1f), accentColor = new Color(0.95f, 0.6f, 0.15f), height = 3.4f, hp = 400, atk = 26, def = 16, spd = 8, isBoss = true, shape = EnemyShape.Wyvern };
+            Defs["boss_shadow"] = new EnemyDefinition3D { id = "boss_shadow", displayName = "Shadow Knight", bodyColor = new Color(0.12f, 0.1f, 0.2f), accentColor = new Color(0.6f, 0.1f, 0.25f), height = 2.2f, hp = 260, atk = 22, def = 14, spd = 9, isBoss = true, element = ElementType.Dark, shape = EnemyShape.Humanoid };
+            Defs["boss_dragon"] = new EnemyDefinition3D { id = "boss_dragon", displayName = "Dragon Lord Vexar", bodyColor = new Color(0.55f, 0.1f, 0.1f), accentColor = new Color(0.95f, 0.6f, 0.15f), height = 3.4f, hp = 400, atk = 26, def = 16, spd = 8, isBoss = true, element = ElementType.Fire, shape = EnemyShape.Wyvern };
         }
 
         public static EnemyDefinition3D Get(string id)

@@ -31,7 +31,10 @@ namespace Chronicles3D.Core
         public bool InBattle { get; private set; }
         public int Gold { get; private set; }
 
+        public QuestSystem3D quests;
+
         public event System.Action<bool> OnBattleChanged;
+        public event System.Action OnGameLoaded;
 
         // Encounter tables per wild zone
         readonly string[][] encounterTables =
@@ -48,6 +51,11 @@ namespace Chronicles3D.Core
             Party.Add(new CharacterInstance3D(CharacterLibrary.Get("cedric")));
             Party.Add(new CharacterInstance3D(CharacterLibrary.Get("lyra")));
             Party.Add(new CharacterInstance3D(CharacterLibrary.Get("aldous")));
+
+            // Quest journal lives on its own GameObject
+            var questGo = new GameObject("QuestSystem");
+            quests = questGo.AddComponent<QuestSystem3D>();
+            quests.game = this;
         }
 
         void Start()
@@ -120,6 +128,7 @@ namespace Chronicles3D.Core
             battle.OnVictory += HandleVictory;
             battle.OnDefeat += HandleDefeat;
             battle.OnLog += msg => Debug.Log("[Battle] " + msg);
+            battle.OnEnemyDefeated += enemyId => { if (quests) quests.RegisterEnemyDefeat(enemyId); };
         }
 
         // ---------- Battle Transitions ----------
@@ -148,9 +157,31 @@ namespace Chronicles3D.Core
 
         void HandleVictory(int exp, int gold)
         {
-            Gold += gold;
-            // Level up heroes that gained exp
+            AddGold(gold);
+            GrantSp(2);   // +2 skill points to every hero per victory
+
+            var leveled = GrantExp(exp);
+            string msg = $"Victory! +{exp} EXP, +{gold} gold, +2 SP per hero.";
+            if (leveled.Count > 0) msg += "\n" + string.Join(", ", leveled) + " leveled up!";
+            LastResultMessage = msg;
+            Debug.Log(msg);
+
+            if (quests) quests.RegisterBattleWin();
+            // UI overlay offers a Continue button (no auto-return needed)
+        }
+
+        /// <summary>Add gold (used by quest rewards too); keeps gold objectives fresh.</summary>
+        public void AddGold(int amount)
+        {
+            Gold += amount;
+            if (quests) quests.RegisterGold(Gold);
+        }
+
+        /// <summary>Distribute EXP and trigger level ups. Returns names of heroes that leveled.</summary>
+        public List<string> GrantExp(int exp)
+        {
             var leveled = new List<string>();
+            if (exp <= 0) return leveled;
             foreach (var hero in Party)
             {
                 hero.exp += exp;
@@ -160,11 +191,15 @@ namespace Chronicles3D.Core
                     leveled.Add(hero.definition.displayName);
                 }
             }
-            string msg = $"Victory! +{exp} EXP, +{gold} gold.";
-            if (leveled.Count > 0) msg += "\n" + string.Join(", ", leveled) + " leveled up!";
-            LastResultMessage = msg;
-            Debug.Log(msg);
-            // UI overlay offers a Continue button (no auto-return needed)
+            if (leveled.Count > 0 && Party.Count > 0 && quests)
+                quests.RegisterPartyLevel(Party[0].level);
+            return leveled;
+        }
+
+        /// <summary>Add skill points to every party member (battle + quest rewards).</summary>
+        public void GrantSp(int amount)
+        {
+            foreach (var hero in Party) hero.sp += amount;
         }
 
         public string LastResultMessage { get; private set; } = "";
@@ -206,6 +241,105 @@ namespace Chronicles3D.Core
                 player.TeleportTo(new Vector3(cx + 2f, 1f, cz + 6f));
             }
             OnBattleChanged?.Invoke(false);
+        }
+
+        // ---------- Save / Load ----------
+        public void SaveToDisk()
+        {
+            if (InBattle)
+            {
+                Debug.Log("[Save] Can't save during battle.");
+                return;
+            }
+            var data = new SaveData3D { gold = Gold };
+            if (player)
+            {
+                var p = player.transform.position;
+                data.playerX = p.x; data.playerY = p.y; data.playerZ = p.z;
+            }
+
+            foreach (var hero in Party)
+            {
+                data.party.Add(new PartyMemberSaveData
+                {
+                    id = hero.definition.id,
+                    level = hero.level,
+                    exp = hero.exp,
+                    expToNext = hero.expToNext,
+                    sp = hero.sp,
+                    unlockedNodes = new List<string>(hero.unlockedNodes),
+                    maxHP = hero.stats.maxHP, currentHP = hero.stats.currentHP,
+                    maxMP = hero.stats.maxMP, currentMP = hero.stats.currentMP,
+                    atk = hero.stats.atk, def = hero.stats.def,
+                    mag = hero.stats.mag, res = hero.stats.res,
+                    spd = hero.stats.spd, luk = hero.stats.luk
+                });
+            }
+
+            if (quests)
+            {
+                data.activeQuests = quests.SnapshotActive();
+                data.completedQuests = new List<string>(quests.Completed);
+            }
+
+            SaveSystem3D.SaveGame(data);
+        }
+
+        public void LoadFromDisk()
+        {
+            if (InBattle)
+            {
+                Debug.Log("[Load] Can't load during battle.");
+                return;
+            }
+            var data = SaveSystem3D.LoadGame();
+            if (data == null)
+            {
+                Debug.Log("[Load] No save file found.");
+                return;
+            }
+
+            // Rebuild party from the snapshot
+            Party.Clear();
+            foreach (var m in data.party)
+            {
+                var def = CharacterLibrary.Get(m.id);
+                if (def == null) continue;
+                var hero = new CharacterInstance3D(def);
+                hero.level = Mathf.Max(1, m.level);
+                hero.exp = Mathf.Max(0, m.exp);
+                hero.expToNext = Mathf.Max(1, m.expToNext);
+                hero.sp = Mathf.Max(0, m.sp);
+                hero.unlockedNodes.Clear();
+                if (m.unlockedNodes != null) hero.unlockedNodes.AddRange(m.unlockedNodes);
+                // Guarantee the free first skill stays unlocked
+                string root = def.skillIds.Count > 0 ? SkillTreeLibrary.SkillNodeId(def.skillIds[0]) : null;
+                if (root != null && !hero.unlockedNodes.Contains(root)) hero.unlockedNodes.Add(root);
+
+                hero.stats.maxHP = Mathf.Max(1, m.maxHP);
+                hero.stats.currentHP = Mathf.Clamp(m.currentHP, 1, Mathf.Max(1, m.maxHP));
+                hero.stats.maxMP = Mathf.Max(0, m.maxMP);
+                hero.stats.currentMP = Mathf.Clamp(m.currentMP, 0, Mathf.Max(0, m.maxMP));
+                hero.stats.atk = m.atk; hero.stats.def = m.def;
+                hero.stats.mag = m.mag; hero.stats.res = m.res;
+                hero.stats.spd = m.spd; hero.stats.luk = m.luk;
+                Party.Add(hero);
+            }
+
+            Gold = Mathf.Max(0, data.gold);
+
+            if (quests)
+            {
+                quests.RestoreActive(data.activeQuests);
+                quests.RestoreCompleted(data.completedQuests);
+                quests.RefreshLiveObjectives();
+            }
+
+            if (player)
+                player.TeleportTo(new Vector3(data.playerX, data.playerY, data.playerZ));
+
+            OnGameLoaded?.Invoke();
+            Debug.Log("[Load] Save restored.");
         }
     }
 }
