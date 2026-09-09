@@ -38,6 +38,15 @@ export const CFG = {
   SKY_NIGHT: 0x0a1030,
   FOG_DAY: 0x9fc9dd,
   FOG_NIGHT: 0x0a1030,
+
+  // ---- kualitas render ----
+  // scale = supersampling (kali resolusi layar), shadow = resolusi shadow map
+  QUALITY: {
+    low: { scale: 1,    shadow: 1024, label: 'Ringan' },
+    hd:  { scale: 1.5,  shadow: 2048, label: 'HD' },
+    uhd: { scale: 2,    shadow: 4096, label: '4K' },
+  },
+  DEFAULT_QUALITY: 'hd',
 };
 
 // Bioma: indeks dipakai di data biome-grid untuk minimap

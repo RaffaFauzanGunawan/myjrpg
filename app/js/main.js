@@ -579,6 +579,25 @@ function boot() {
     <p>Raja Aldric dibunuh, mahkota jatuh, dan kerajaan Valdria tercabik. Berpetualanglah sebagai Sir Cedric bersama Lyra dan Aldous: kalahkan Shadow Knight, Naga Kristal, hingga sang tiran Marius.</p>
     <p>6 bioma: Kota Valdria, Hutan Verdant, Pegunungan Kristal, Ashlands, Danau Mistral, dan Pantai Emas.</p>`);
 
+  // kualitas render (Ringan / HD / 4K) & layar penuh
+  const QUAL_KEYS = Object.keys(CFG.QUALITY);
+  let quality = localStorage.getItem('chronicles_quality');
+  if (!QUAL_KEYS.includes(quality)) quality = CFG.DEFAULT_QUALITY;
+  const qualityBtn = $('btn-quality');
+  const paintQuality = () => { qualityBtn.innerHTML = `🖥️&nbsp; Kualitas: ${CFG.QUALITY[quality].label}`; };
+  paintQuality();
+  qualityBtn.onclick = () => {
+    quality = QUAL_KEYS[(QUAL_KEYS.indexOf(quality) + 1) % QUAL_KEYS.length];
+    localStorage.setItem('chronicles_quality', quality);
+    engine.applyQuality(quality);
+    paintQuality();
+  };
+  $('btn-fullscreen').onclick = () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    else document.exitFullscreen();
+  };
+  engine.applyQuality(quality);
+
   // input global: E, F5, Esc
   window.addEventListener('keydown', (e) => {
     if (e.code === 'KeyE' && gameStarted && !battle.active && !ui.dialog.active && $('shop-panel').classList.contains('hidden')) {

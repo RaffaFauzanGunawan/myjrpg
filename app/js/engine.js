@@ -13,11 +13,13 @@ export class Engine {
 
     // ---- renderer ----
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
     container.appendChild(this.renderer.domElement);
 
     // ---- scene & kamera ----
@@ -36,8 +38,10 @@ export class Engine {
     sc.left = sc.bottom = -28; sc.right = sc.top = 28;
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
-    this.ambient = new THREE.AmbientLight(0x8899bb, 0.55);
+    this.ambient = new THREE.AmbientLight(0x8899bb, 0.5);
     this.scene.add(this.ambient);
+    this.hemi = new THREE.HemisphereLight(0xbdd7ff, 0x3a4a2a, 0.55);
+    this.scene.add(this.hemi);
 
     // ---- langit: matahari / bulan / bintang ----
     this.sky = new THREE.Group();
@@ -259,6 +263,19 @@ export class Engine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
+  }
+
+  // terapkan kualitas render (supersampling + shadow) dari menu
+  applyQuality(q) {
+    const presets = CFG.QUALITY;
+    const p = presets[q] || presets[CFG.DEFAULT_QUALITY];
+    // supersampling: kali resolusi layar (dibatasi biar tidak keterlaluan)
+    const base = window.devicePixelRatio || 1;
+    const ratio = Math.min(base * p.scale, q === 'uhd' ? 4 : 3);
+    this.renderer.setPixelRatio(ratio);
+    this.sun.shadow.mapSize.set(p.shadow, p.shadow);
+    this.sun.shadow.map = null; // paksa buat ulang shadow map
+    this.resize();
   }
 
   render() { this.renderer.render(this.scene, this.camera); }

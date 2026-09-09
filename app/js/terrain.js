@@ -428,6 +428,7 @@ export class World {
     const x0 = cx * CS, z0 = cz * CS;
     const positions = [], colors = [], normals = [], indices = [];
     let vertCount = 0;
+    const DIRT_C = new THREE.Color(TILE_PALETTES.dirt[0]);
     const dirs = [
       { d: [1, 0, 0], n: [1, 0, 0] }, { d: [-1, 0, 0], n: [-1, 0, 0] },
       { d: [0, 1, 0], n: [0, 1, 0] }, { d: [0, -1, 0], n: [0, -1, 0] },
@@ -441,10 +442,24 @@ export class World {
           if (!t) continue;
           const c = this._blockColor(t, x, y, z);
 
+          // lereng curam: rumput di tebing berubah jadi tanah
+          let slopeSteep = false;
+          if (t === 1 && y === this.height[this.idx(x, z)]) {
+            const hm = this.height[this.idx(x, z)];
+            const hL = x > 0 ? this.height[this.idx(x - 1, z)] : hm;
+            const hR = x < S - 1 ? this.height[this.idx(x + 1, z)] : hm;
+            const hU = z > 0 ? this.height[this.idx(x, z - 1)] : hm;
+            const hD = z < S - 1 ? this.height[this.idx(x, z + 1)] : hm;
+            slopeSteep = Math.max(Math.abs(hL - hm), Math.abs(hR - hm), Math.abs(hU - hm), Math.abs(hD - hm)) >= 2;
+          }
+
           for (const { d, n } of dirs) {
             const nx = x + d[0], ny = y + d[1], nz = z + d[2];
             if (!this.solidAt(nx, ny, nz)) {
-              // air: hanya tampilkan sisi atas (semi-transparan ditangani renderer? kita buat warna solid)
+              // warna sisi: rumput di lereng -> tanah; sisi yang tertutup blok -> gelap (AO)
+              let fc = c;
+              if (slopeSteep && n[1] === 1) fc = DIRT_C;
+              else if (n[1] === 0 && this.solidAt(x, y + 1, z)) fc = c.clone().multiplyScalar(0.78);
               const base = positions.length / 3;
               const s = 1;
               // empat sudut kubus pada sisi d
@@ -474,7 +489,7 @@ export class World {
               if (wx * n[0] + wy * n[1] + wz * n[2] < 0) corners.reverse();
               for (const cc of corners) {
                 positions.push(cc[0], cc[1], cc[2]);
-                colors.push(c.r, c.g, c.b);
+                colors.push(fc.r, fc.g, fc.b);
                 normals.push(n[0], n[1], n[2]);
               }
               // dua segitiga
