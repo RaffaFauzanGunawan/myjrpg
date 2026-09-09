@@ -532,7 +532,16 @@ function loop() {
 // ============================================================
 function boot() {
   engine = new Engine($('viewport'));
-  world = new World(engine);
+  // titik yang harus bebas pohon/bangunan: NPC, peti, boss, waystone, spawn
+  world = new World(engine, {
+    protected: [
+      ...NPCS.map((n) => ({ x: n.x, z: n.z })),
+      ...CHESTS.map((c) => ({ x: c.x, z: c.z })),
+      ...BOSS_SPOTS.map((b) => ({ x: b.x, z: b.z })),
+      { x: 96, z: 96 },  // waystone
+      { x: 84, z: 132 }, // spawn awal
+    ],
+  });
   ui = new UI(engine.audio);
   battle = new Battle(engine.audio);
 

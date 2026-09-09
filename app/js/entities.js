@@ -202,7 +202,14 @@ class Entity {
     const bio = this.world.biomeAt(gx, gz);
     if (bio === 4) return false; // jangan masuk danau
     const gy = this.world.groundY(gx, gz);
-    return Math.abs(gy - this.getY()) < 2.4; // tidak boleh menanjak terlalu curam
+    if (Math.abs(gy - this.getY()) > 2.4) return false; // terlalu curam
+    // tembok/pohon/bangunan: blok struktural di ketinggian badan
+    const fy = Math.floor(gy);
+    const t1 = this.world.blockAt(gx, fy + 1, gz);
+    const t2 = this.world.blockAt(gx, fy + 2, gz);
+    if (t1 === 5 || t1 === 12 || t1 === 13 || t1 === 16) return false;
+    if (t2 === 5 || t2 === 12 || t2 === 13 || t2 === 16) return false;
+    return true;
   }
 
   updatePhysics(dt) {
@@ -268,17 +275,18 @@ export class Player extends Entity {
       d = Math.atan2(Math.sin(d), Math.cos(d));
       this.model.rotation.y += d * (1 - Math.pow(0.0005, dt));
     }
-    // animasi jalan
-    this.animT += dt * (moving ? 10 : 0);
+    // animasi jalan: ayunan kaki/tangan + bob badan biar terasa hidup
+    this.animT += dt * (moving ? 11 : 0);
     const p = this.model.userData.parts;
-    const swing = Math.sin(this.animT) * (moving ? 0.5 : 0);
+    const swing = Math.sin(this.animT) * (moving ? 0.62 : 0);
     if (p) {
       p.legL.rotation.x = swing;
       p.legR.rotation.x = -swing;
-      p.armL.rotation.x = -swing * 0.7;
-      p.armR.rotation.x = swing * 0.7;
+      p.armL.rotation.x = -swing * 0.75;
+      p.armR.rotation.x = swing * 0.75;
     }
-    this.model.position.set(this.pos.x, this.pos.y, this.pos.z);
+    const bob = moving ? Math.abs(Math.sin(this.animT)) * 0.07 : 0;
+    this.model.position.set(this.pos.x, this.pos.y + bob, this.pos.z);
     this.grounded = this.onGround;
     if (this.onGround && !wasGrounded) this._landDust();
   }
